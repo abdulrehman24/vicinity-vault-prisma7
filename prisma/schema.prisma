@@ -1,0 +1,384 @@
+generator client {
+  provider = "prisma-client-js"
+  engineType = "binary"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum user_role {
+  user
+  admin
+}
+
+enum source_platform {
+  vimeo
+}
+
+enum source_status {
+  connected
+  syncing
+  error
+  disabled
+}
+
+enum video_status {
+  active
+  archived
+  deleted
+}
+
+enum transcript_source {
+  vimeo
+  openai
+}
+
+enum transcript_status {
+  pending
+  complete
+  failed
+}
+
+enum embedding_scope {
+  video_metadata
+  transcript_chunk
+}
+
+enum embedding_model {
+  text_embedding_3_small
+}
+
+enum shortlist_visibility {
+  private
+  team
+  shared_link
+}
+
+enum sync_run_trigger {
+  manual
+  scheduled
+  retry
+  webhook
+}
+
+enum sync_run_status {
+  queued
+  running
+  success
+  partial
+  failed
+  cancelled
+}
+
+enum sync_error_stage {
+  fetch_metadata
+  fetch_transcript
+  chunk_transcript
+  embed
+  upsert
+}
+
+enum sync_error_status {
+  open
+  retrying
+  resolved
+  ignored
+}
+
+model users {
+  id              String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email           String            @unique @db.Citext
+  full_name       String
+  avatar_initials String?           @db.VarChar(8)
+  role            user_role         @default(user)
+  sso_provider    String?
+  sso_subject     String?
+  is_active       Boolean           @default(true)
+  last_login_at   DateTime?         @db.Timestamptz(6)
+  created_at      DateTime          @default(now()) @db.Timestamptz(6)
+  updated_at      DateTime          @default(now()) @db.Timestamptz(6)
+  data_sources    data_sources[]
+  favourites      favourites[]
+  shortlists      shortlists[]
+  shortlist_items shortlist_items[]
+  sync_runs       sync_runs[]
+  ai_configs      ai_configs[]
+  shortlist_share_audit_logs shortlist_share_audit_logs[]
+
+  @@unique([sso_provider, sso_subject])
+}
+
+model data_sources {
+  id                            String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                          String
+  platform                      source_platform @default(vimeo)
+  account_uri                   String?
+  vimeo_client_id               String?
+  vimeo_client_secret_encrypted String?
+  access_token_encrypted        String?
+  status                        source_status   @default(connected)
+  last_sync_at                  DateTime?       @db.Timestamptz(6)
+  video_count                   Int             @default(0)
+  created_by_user_id            String?         @db.Uuid
+  created_at                    DateTime        @default(now()) @db.Timestamptz(6)
+  updated_at                    DateTime        @default(now()) @db.Timestamptz(6)
+  created_by                    users?          @relation(fields: [created_by_user_id], references: [id], onDelete: SetNull)
+  videos                        videos[]
+  sync_runs                     sync_runs[]
+  sync_errors                   sync_errors[]
+
+  @@index([status])
+}
+
+model videos {
+  id                String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  data_source_id    String                   @db.Uuid
+  vimeo_video_id    String                   @unique
+  vimeo_uri         String?                  @unique
+  title             String
+  description       String?
+  duration_seconds  Int?
+  thumbnail_url     String?
+  video_url         String
+  folder_name       String?
+  language_code     String?                  @db.VarChar(16)
+  privacy_view      String?
+  status            video_status             @default(active)
+  metadata_json     Json                     @default("{}")
+  metadata_tsv      Unsupported("tsvector")?
+  published_at      DateTime?                @db.Timestamptz(6)
+  synced_at         DateTime?                @db.Timestamptz(6)
+  created_at        DateTime                 @default(now()) @db.Timestamptz(6)
+  updated_at        DateTime                 @default(now()) @db.Timestamptz(6)
+  data_source       data_sources             @relation(fields: [data_source_id], references: [id], onDelete: Restrict)
+  video_tags        video_tags[]
+  video_categories  video_categories[]
+  transcripts       transcripts[]
+  transcript_chunks transcript_chunks[]
+  embeddings        embeddings[]
+  favourites        favourites[]
+  shortlist_items   shortlist_items[]
+  sync_errors       sync_errors[]
+
+  @@index([data_source_id])
+  @@index([status])
+  @@index([published_at])
+}
+
+model video_tags {
+  id             BigInt   @id @default(autoincrement())
+  video_id       String   @db.Uuid
+  tag            String
+  normalized_tag String?
+  created_at     DateTime @default(now()) @db.Timestamptz(6)
+  video          videos   @relation(fields: [video_id], references: [id], onDelete: Cascade)
+
+  @@unique([video_id, tag])
+  @@index([video_id])
+}
+
+model categories {
+  id               BigInt             @id @default(autoincrement())
+  slug             String             @unique
+  name             String             @unique
+  description      String?
+  video_categories video_categories[]
+}
+
+model video_categories {
+  video_id    String     @db.Uuid
+  category_id BigInt
+  confidence  Decimal?   @db.Decimal(5, 4)
+  video       videos     @relation(fields: [video_id], references: [id], onDelete: Cascade)
+  category    categories @relation(fields: [category_id], references: [id], onDelete: Restrict)
+
+  @@id([video_id, category_id])
+  @@index([category_id])
+}
+
+model transcripts {
+  id                String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  video_id          String              @db.Uuid
+  source            transcript_source
+  status            transcript_status   @default(pending)
+  language_code     String              @default("en") @db.VarChar(16)
+  provider_asset_id String?
+  raw_text          String?
+  error_message     String?
+  is_active         Boolean             @default(true)
+  version           Int                 @default(1)
+  generated_at      DateTime?           @db.Timestamptz(6)
+  created_at        DateTime            @default(now()) @db.Timestamptz(6)
+  updated_at        DateTime            @default(now()) @db.Timestamptz(6)
+  video             videos              @relation(fields: [video_id], references: [id], onDelete: Cascade)
+  transcript_chunks transcript_chunks[]
+
+  @@unique([video_id, source, language_code, version])
+  @@index([video_id, is_active])
+}
+
+model transcript_chunks {
+  id            String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  transcript_id String                   @db.Uuid
+  video_id      String                   @db.Uuid
+  chunk_index   Int
+  start_seconds Decimal?                 @db.Decimal(10, 3)
+  end_seconds   Decimal?                 @db.Decimal(10, 3)
+  token_count   Int?
+  content       String
+  content_tsv   Unsupported("tsvector")?
+  created_at    DateTime                 @default(now()) @db.Timestamptz(6)
+  transcript    transcripts              @relation(fields: [transcript_id], references: [id], onDelete: Cascade)
+  video         videos                   @relation(fields: [video_id], references: [id], onDelete: Cascade)
+  embeddings    embeddings[]
+
+  @@unique([transcript_id, chunk_index])
+  @@index([video_id])
+}
+
+model embeddings {
+  id                  String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  scope               embedding_scope
+  model               embedding_model             @default(text_embedding_3_small)
+  embedding           Unsupported("vector(1536)")
+  video_id            String?                     @db.Uuid
+  transcript_chunk_id String?                     @db.Uuid
+  checksum            String?
+  created_at          DateTime                    @default(now()) @db.Timestamptz(6)
+  video               videos?                     @relation(fields: [video_id], references: [id], onDelete: Cascade)
+  transcript_chunk    transcript_chunks?          @relation(fields: [transcript_chunk_id], references: [id], onDelete: Cascade)
+
+  @@index([scope])
+}
+
+model favourites {
+  user_id    String   @db.Uuid
+  video_id   String   @db.Uuid
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  user       users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  video      videos   @relation(fields: [video_id], references: [id], onDelete: Cascade)
+
+  @@id([user_id, video_id])
+  @@index([video_id])
+}
+
+model shortlists {
+  id              String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  owner_user_id   String               @db.Uuid
+  name            String
+  description     String?
+  visibility      shortlist_visibility @default(private)
+  share_token     String?              @unique @db.Uuid
+  share_expires_at DateTime?           @db.Timestamptz(6)
+  share_last_accessed_at DateTime?     @db.Timestamptz(6)
+  is_archived     Boolean              @default(false)
+  created_at      DateTime             @default(now()) @db.Timestamptz(6)
+  updated_at      DateTime             @default(now()) @db.Timestamptz(6)
+  owner_user      users                @relation(fields: [owner_user_id], references: [id], onDelete: Cascade)
+  shortlist_items shortlist_items[]
+  share_audit_logs shortlist_share_audit_logs[]
+
+  @@index([owner_user_id])
+  @@index([visibility])
+}
+
+model shortlist_share_audit_logs {
+  id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  shortlist_id       String    @db.Uuid
+  actor_user_id      String?   @db.Uuid
+  action             String
+  detail             Json      @default("{}")
+  created_at         DateTime  @default(now()) @db.Timestamptz(6)
+  shortlist          shortlists @relation(fields: [shortlist_id], references: [id], onDelete: Cascade)
+  actor_user         users?    @relation(fields: [actor_user_id], references: [id], onDelete: SetNull)
+
+  @@index([shortlist_id, created_at])
+  @@index([action, created_at])
+}
+
+model shortlist_items {
+  shortlist_id     String     @db.Uuid
+  video_id         String     @db.Uuid
+  added_by_user_id String?    @db.Uuid
+  position         Int?
+  note             String?
+  created_at       DateTime   @default(now()) @db.Timestamptz(6)
+  shortlist        shortlists @relation(fields: [shortlist_id], references: [id], onDelete: Cascade)
+  video            videos     @relation(fields: [video_id], references: [id], onDelete: Cascade)
+  added_by_user    users?     @relation(fields: [added_by_user_id], references: [id], onDelete: SetNull)
+
+  @@id([shortlist_id, video_id])
+  @@unique([shortlist_id, position])
+  @@index([video_id])
+}
+
+model sync_runs {
+  id                    String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  data_source_id        String           @db.Uuid
+  initiated_by_user_id  String?          @db.Uuid
+  trigger               sync_run_trigger @default(manual)
+  status                sync_run_status  @default(queued)
+  retry_of_run_id       String?          @db.Uuid
+  started_at            DateTime?        @db.Timestamptz(6)
+  finished_at           DateTime?        @db.Timestamptz(6)
+  videos_scanned        Int              @default(0)
+  videos_created        Int              @default(0)
+  videos_updated        Int              @default(0)
+  videos_deleted        Int              @default(0)
+  transcripts_processed Int              @default(0)
+  embeddings_created    Int              @default(0)
+  error_count           Int              @default(0)
+  notes                 String?
+  created_at            DateTime         @default(now()) @db.Timestamptz(6)
+  data_source           data_sources     @relation(fields: [data_source_id], references: [id], onDelete: Restrict)
+  initiated_by_user     users?           @relation(fields: [initiated_by_user_id], references: [id], onDelete: SetNull)
+  retry_of_run          sync_runs?       @relation("retry_run", fields: [retry_of_run_id], references: [id], onDelete: SetNull)
+  retries               sync_runs[]      @relation("retry_run")
+  sync_errors           sync_errors[]
+
+  @@index([data_source_id, created_at])
+  @@index([status])
+}
+
+model sync_errors {
+  id             String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sync_run_id    String            @db.Uuid
+  data_source_id String            @db.Uuid
+  video_id       String?           @db.Uuid
+  stage          sync_error_stage
+  status         sync_error_status @default(open)
+  error_code     String?
+  error_message  String
+  payload        Json              @default("{}")
+  retry_count    Int               @default(0)
+  next_retry_at  DateTime?         @db.Timestamptz(6)
+  resolved_at    DateTime?         @db.Timestamptz(6)
+  created_at     DateTime          @default(now()) @db.Timestamptz(6)
+  updated_at     DateTime          @default(now()) @db.Timestamptz(6)
+  sync_run       sync_runs         @relation(fields: [sync_run_id], references: [id], onDelete: Cascade)
+  data_source    data_sources      @relation(fields: [data_source_id], references: [id], onDelete: Restrict)
+  video          videos?           @relation(fields: [video_id], references: [id], onDelete: SetNull)
+
+  @@index([sync_run_id])
+  @@index([data_source_id])
+  @@index([status, next_retry_at])
+}
+
+model ai_configs {
+  id                       String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  singleton                Boolean  @default(true)
+  openai_api_key_encrypted String?
+  openai_key_last4         String?  @db.VarChar(8)
+  embedding_model          String   @default("text-embedding-3-small")
+  explanation_model        String   @default("gpt-4o-mini")
+  match_sensitivity        Decimal  @default(0.65) @db.Decimal(4, 3)
+  match_reason_prompt      String
+  auto_sync_embeddings     Boolean  @default(true)
+  updated_by_user_id       String?  @db.Uuid
+  created_at               DateTime @default(now()) @db.Timestamptz(6)
+  updated_at               DateTime @default(now()) @db.Timestamptz(6)
+  updated_by_user          users?   @relation(fields: [updated_by_user_id], references: [id], onDelete: SetNull)
+
+  @@unique([singleton])
+}

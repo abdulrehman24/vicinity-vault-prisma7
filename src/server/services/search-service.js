@@ -1,0 +1,272 @@
+import { OpenAiService } from "./openai-service";
+import { AdminAiConfigService } from "./admin-ai-config-service";
+import { toVideoCardDto } from "./video-dto";
+
+const normalize = (query) => String(query || "").trim();
+const normalizeLower = (value) => String(value || "").trim().toLowerCase();
+const clamp = (value, min = 0, max = 1) => Math.max(min, Math.min(max, value));
+
+const toIdSet = (rows, field) =>
+  new Set((rows || []).map((row) => row[field]).filter(Boolean));
+
+const toScoreMap = (rows, idField, scoreField) => {
+  const map = new Map();
+  for (const row of rows || []) {
+    const id = row[idField];
+    if (!id) continue;
+    map.set(id, Number(row[scoreField]) || 0);
+  }
+  return map;
+};
+
+const normalizeMetadataScore = (raw) => clamp(raw / 0.9);
+const normalizeTranscriptScore = (raw) => clamp(raw / 0.75);
+const normalizeSemanticScore = (raw) => clamp(raw);
+
+const buildHeuristicReason = ({ metadataScore, transcriptScore, semanticScore, video }) => {
+  if (semanticScore >= 0.68) {
+    return "Matches because semantic context from transcript and metadata aligns closely with your brief.";
+  }
+  if (transcriptScore >= metadataScore && transcriptScore > 0.3) {
+    return "Matches because transcript content directly reflects key ideas from your brief.";
+  }
+
+  const topTag = video.video_tags?.[0]?.tag;
+  if (topTag) {
+    return `Matches because its metadata and tag "${topTag}" align with your brief context.`;
+  }
+
+  return "Matches because title, description, and folder context are relevant to your brief.";
+};
+
+const buildExplanationCandidates = (ranked) =>
+  ranked.slice(0, 12).map((entry) => ({
+    id: entry.video.id,
+    title: entry.video.title,
+    description: String(entry.video.description || "").slice(0, 220),
+    folder: entry.video.folder_name || "",
+    tags: (entry.video.video_tags || []).map((tag) => tag.tag).slice(0, 5),
+    categories: (entry.video.video_categories || []).map((item) => item.category?.name).filter(Boolean).slice(0, 4),
+    strongestSignal:
+      entry.semanticScore >= entry.transcriptScore && entry.semanticScore >= entry.metadataScore
+        ? "semantic"
+        : entry.transcriptScore >= entry.metadataScore
+          ? "transcript"
+          : "metadata"
+  }));
+
+export class SearchService {
+  constructor({ prisma }) {
+    this.prisma = prisma;
+  }
+
+  async search(query, limit = 30) {
+    const q = normalize(query);
+    if (!q) return [];
+    const qLower = normalizeLower(q);
+
+    const metadataRows = await this.prisma.$queryRawUnsafe(
+      `
+      SELECT
+        v.id AS video_id,
+        (
+          COALESCE(ts_rank_cd(v.metadata_tsv, websearch_to_tsquery('english', $1)), 0) * 1.4
+          + CASE WHEN v.title ILIKE $2 THEN 0.35 ELSE 0 END
+          + CASE WHEN coalesce(v.description, '') ILIKE $2 THEN 0.2 ELSE 0 END
+          + CASE WHEN coalesce(v.folder_name, '') ILIKE $2 THEN 0.15 ELSE 0 END
+          + COALESCE(MAX(CASE WHEN coalesce(vt.normalized_tag, '') LIKE $3 THEN 0.3 ELSE 0 END), 0)
+          + COALESCE(MAX(CASE WHEN coalesce(lower(c.name), '') LIKE $3 OR coalesce(lower(c.slug), '') LIKE $3 THEN 0.25 ELSE 0 END), 0)
+        ) AS metadata_score
+      FROM "videos" v
+      LEFT JOIN "video_tags" vt ON vt.video_id = v.id
+      LEFT JOIN "video_categories" vc ON vc.video_id = v.id
+      LEFT JOIN "categories" c ON c.id = vc.category_id
+      WHERE v.status = 'active'
+        AND (
+          v.metadata_tsv @@ websearch_to_tsquery('english', $1)
+          OR v.title ILIKE $2
+          OR coalesce(v.description, '') ILIKE $2
+          OR coalesce(v.folder_name, '') ILIKE $2
+          OR coalesce(vt.normalized_tag, '') LIKE $3
+          OR coalesce(lower(c.name), '') LIKE $3
+          OR coalesce(lower(c.slug), '') LIKE $3
+        )
+      GROUP BY v.id
+      ORDER BY metadata_score DESC
+      LIMIT $4;
+      `,
+      q,
+      `%${q}%`,
+      `%${qLower}%`,
+      limit * 3
+    );
+
+    const transcriptRows = await this.prisma.$queryRawUnsafe(
+      `
+      SELECT
+        tc.video_id,
+        (
+          COALESCE(MAX(ts_rank_cd(tc.content_tsv, websearch_to_tsquery('english', $1))), 0) * 1.2
+          + COALESCE(MAX(CASE WHEN tc.content ILIKE $2 THEN 0.2 ELSE 0 END), 0)
+        ) AS transcript_score
+      FROM "transcript_chunks" tc
+      JOIN "transcripts" t ON t.id = tc.transcript_id
+      JOIN "videos" v ON v.id = tc.video_id
+      WHERE v.status = 'active'
+        AND t.is_active = true
+        AND t.status = 'complete'
+        AND (
+          tc.content_tsv @@ websearch_to_tsquery('english', $1)
+          OR tc.content ILIKE $2
+        )
+      GROUP BY tc.video_id
+      ORDER BY transcript_score DESC
+      LIMIT $3;
+      `,
+      q,
+      `%${q}%`,
+      limit * 3
+    );
+
+    const metadataScoreMap = toScoreMap(metadataRows, "video_id", "metadata_score");
+    const transcriptScoreMap = toScoreMap(transcriptRows, "video_id", "transcript_score");
+    const metadataIds = toIdSet(metadataRows, "video_id");
+    const transcriptIds = toIdSet(transcriptRows, "video_id");
+    const semanticVideoScores = new Map();
+    let runtimeAiConfig = null;
+    let openai = null;
+
+    try {
+      runtimeAiConfig = await new AdminAiConfigService({ prisma: this.prisma }).getRuntimeConfig();
+      if (runtimeAiConfig.openAiApiKey) {
+        openai = new OpenAiService({
+          apiKey: runtimeAiConfig.openAiApiKey,
+          embeddingModel: runtimeAiConfig.embeddingModel,
+          transcriptionModel: runtimeAiConfig.transcriptionModel
+        });
+      }
+      if (openai?.isConfigured()) {
+        const queryEmbedding = await openai.createEmbedding(q, runtimeAiConfig.embeddingModel);
+        const vectorLiteral = `[${queryEmbedding.join(",")}]`;
+        const semanticRows = await this.prisma.$queryRawUnsafe(
+          `
+          WITH scores AS (
+            SELECT
+              COALESCE(e.video_id, tc.video_id) AS video_id,
+              CASE
+                WHEN e.scope = 'video_metadata' THEN (1 - (e.embedding <=> $1::vector))
+                ELSE (1 - (e.embedding <=> $1::vector)) * 0.9
+              END AS similarity
+            FROM "embeddings" e
+            LEFT JOIN "transcript_chunks" tc ON tc.id = e.transcript_chunk_id
+            LEFT JOIN "videos" v ON v.id = COALESCE(e.video_id, tc.video_id)
+            WHERE e.scope IN ('video_metadata', 'transcript_chunk')
+              AND v.status = 'active'
+          )
+          SELECT video_id, MAX(similarity) AS similarity
+          FROM scores
+          WHERE video_id IS NOT NULL
+          GROUP BY video_id
+          ORDER BY MAX(similarity) DESC
+          LIMIT $2;
+          `,
+          vectorLiteral,
+          limit * 3
+        );
+
+        for (const row of semanticRows) {
+          semanticVideoScores.set(row.video_id, Number(row.similarity) || 0);
+        }
+      }
+    } catch {
+      // Semantic search is best-effort for MVP.
+    }
+
+    const ids = new Set([
+      ...metadataIds,
+      ...transcriptIds,
+      ...Array.from(semanticVideoScores.keys())
+    ]);
+
+    if (ids.size === 0) return [];
+
+    const videos = await this.prisma.videos.findMany({
+      where: { id: { in: Array.from(ids) } },
+      include: {
+        video_tags: true,
+        video_categories: {
+          include: { category: true }
+        }
+      }
+    });
+
+    const sensitivity = clamp(Number(runtimeAiConfig?.matchSensitivity ?? 0.65));
+    const metadataWeight = 0.45 - sensitivity * 0.1;
+    const transcriptWeight = 0.25 - sensitivity * 0.05;
+    const semanticWeight = 0.3 + sensitivity * 0.15;
+    const minScoreThreshold = 0.14 + sensitivity * 0.16;
+
+    const rankedEntries = videos
+      .map((video) => {
+        const metadataScore = normalizeMetadataScore(metadataScoreMap.get(video.id) || (metadataIds.has(video.id) ? 0.25 : 0));
+        const transcriptScore = normalizeTranscriptScore(transcriptScoreMap.get(video.id) || (transcriptIds.has(video.id) ? 0.25 : 0));
+        const semanticScore = normalizeSemanticScore(semanticVideoScores.get(video.id) || 0);
+        const merged =
+          metadataScore * metadataWeight +
+          transcriptScore * transcriptWeight +
+          semanticScore * semanticWeight;
+
+        return {
+          video,
+          metadataScore,
+          transcriptScore,
+          semanticScore,
+          mergedScore: clamp(merged, 0, 0.99)
+        };
+      })
+      .filter((entry) => entry.mergedScore >= minScoreThreshold)
+      .sort((a, b) => b.mergedScore - a.mergedScore)
+      .slice(0, limit);
+
+    if (rankedEntries.length === 0) {
+      return [];
+    }
+
+    const aiReasonMap = new Map();
+    if (openai?.isConfigured()) {
+      try {
+        const explanationModel = String(runtimeAiConfig?.explanationModel || "gpt-4o-mini");
+        const safeModel = explanationModel.includes("transcribe") ? "gpt-4o-mini" : explanationModel;
+        const aiCandidates = buildExplanationCandidates(rankedEntries);
+        const reasons = await openai.generateMatchReasons({
+          query: q,
+          candidates: aiCandidates,
+          systemPrompt: runtimeAiConfig?.matchReasonPrompt,
+          modelOverride: safeModel
+        });
+        for (const [key, value] of reasons.entries()) {
+          aiReasonMap.set(key, value);
+        }
+      } catch {
+        // Explanations are best-effort. We fallback to deterministic reasons.
+      }
+    }
+
+    const ranked = rankedEntries.map((entry) => {
+      const reason =
+        aiReasonMap.get(entry.video.id) ||
+        buildHeuristicReason({
+          metadataScore: entry.metadataScore,
+          transcriptScore: entry.transcriptScore,
+          semanticScore: entry.semanticScore,
+          video: entry.video
+        });
+      return toVideoCardDto(entry.video, {
+        matchScore: entry.mergedScore,
+        matchReason: reason
+      });
+    });
+
+    return ranked;
+  }
+}
