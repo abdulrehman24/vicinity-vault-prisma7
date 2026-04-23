@@ -28,8 +28,9 @@ const scoreCategory = (text, keywords = []) => {
 };
 
 export class VideoCategorizationService {
-  constructor({ prisma }) {
+  constructor({ prisma, logger = console }) {
     this.prisma = prisma;
+    this.logger = logger;
   }
 
   async ensureDefaultCategories() {
@@ -51,6 +52,7 @@ export class VideoCategorizationService {
   }
 
   async categorizeVideo({ videoId, title, description, folderName, tags = [], transcriptText = "" }) {
+    this.logger.debug("Video categorization started", { videoId });
     await this.ensureDefaultCategories();
 
     const categories = await this.prisma.categories.findMany({
@@ -58,6 +60,7 @@ export class VideoCategorizationService {
     });
 
     if (!categories.length) {
+      this.logger.warn("Video categorization skipped: no categories configured", { videoId });
       return { assigned: 0 };
     }
 
@@ -69,6 +72,7 @@ export class VideoCategorizationService {
 
     if (!corpus) {
       await this.prisma.video_categories.deleteMany({ where: { video_id: videoId } });
+      this.logger.info("Video categorization cleared: empty corpus", { videoId });
       return { assigned: 0 };
     }
 
@@ -92,6 +96,7 @@ export class VideoCategorizationService {
 
     await this.prisma.video_categories.deleteMany({ where: { video_id: videoId } });
     if (!ranked.length) {
+      this.logger.info("Video categorization completed: no category matched threshold", { videoId });
       return { assigned: 0 };
     }
 
@@ -103,6 +108,10 @@ export class VideoCategorizationService {
       }))
     });
 
+    this.logger.info("Video categorization saved", {
+      videoId,
+      assigned: ranked.length
+    });
     return { assigned: ranked.length };
   }
 }

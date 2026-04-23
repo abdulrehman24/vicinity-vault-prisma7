@@ -13,8 +13,18 @@ const localBypassEmail = String(process.env.LOCAL_BYPASS_EMAIL || "")
   .trim()
   .toLowerCase();
 const localBypassConfigured = localBypassEnabled && Boolean(localBypassEmail);
+const localBypassRole = Object.values(user_role).includes(process.env.LOCAL_BYPASS_ROLE)
+  ? process.env.LOCAL_BYPASS_ROLE
+  : user_role.admin;
 
 const sanitizeErrorCode = (code) => encodeURIComponent(code);
+const toBypassName = (email) =>
+  String(email || "")
+    .split("@")[0]
+    .split(/[._-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ") || "Local Admin";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   trustHost: true,
@@ -50,8 +60,26 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             async authorize() {
               const email = localBypassEmail;
               if (!email) return null;
-              const user = await prisma.users.findUnique({
+              const now = new Date();
+              const user = await prisma.users.upsert({
                 where: { email },
+                create: {
+                  email,
+                  full_name: toBypassName(email),
+                  role: localBypassRole,
+                  is_active: true,
+                  sso_provider: "local-bypass",
+                  sso_subject: email,
+                  last_login_at: now
+                },
+                update: {
+                  is_active: true,
+                  role: localBypassRole,
+                  sso_provider: "local-bypass",
+                  sso_subject: email,
+                  last_login_at: now,
+                  updated_at: now
+                },
                 select: {
                   id: true,
                   email: true,
@@ -60,7 +88,6 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
                   is_active: true
                 }
               });
-              if (!user || !user.is_active) return null;
               return {
                 id: user.id,
                 email: user.email,

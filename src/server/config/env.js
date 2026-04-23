@@ -5,7 +5,7 @@ const asOptional = (value) => {
 };
 
 const defaultEmbeddingModel = "text-embedding-3-small";
-const defaultTranscriptionModel = "gpt-4o-mini-transcribe";
+const defaultTranscriptionModel = "whisper-1";
 
 export const env = {
   databaseUrl: asOptional(process.env.DATABASE_URL),

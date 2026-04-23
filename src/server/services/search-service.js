@@ -5,6 +5,44 @@ import { toVideoCardDto } from "./video-dto";
 const normalize = (query) => String(query || "").trim();
 const normalizeLower = (value) => String(value || "").trim().toLowerCase();
 const clamp = (value, min = 0, max = 1) => Math.max(min, Math.min(max, value));
+const NOISE_TERMS = new Set([
+  "i",
+  "me",
+  "my",
+  "we",
+  "want",
+  "need",
+  "looking",
+  "search",
+  "find",
+  "video",
+  "videos",
+  "related",
+  "about",
+  "for",
+  "the",
+  "a",
+  "an",
+  "to",
+  "of",
+  "on",
+  "in",
+  "with",
+  "please"
+]);
+
+const buildSearchIntentQuery = (raw) => {
+  const normalized = normalize(raw);
+  if (!normalized) return "";
+  const compact = normalized
+    .toLowerCase()
+    .replace(/[^\w\s]/g, " ")
+    .split(/\s+/)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 1 && !NOISE_TERMS.has(part));
+  const unique = Array.from(new Set(compact));
+  return unique.join(" ").trim() || normalized;
+};
 
 const toIdSet = (rows, field) =>
   new Set((rows || []).map((row) => row[field]).filter(Boolean));
@@ -63,7 +101,8 @@ export class SearchService {
   async search(query, limit = 30) {
     const q = normalize(query);
     if (!q) return [];
-    const qLower = normalizeLower(q);
+    const qIntent = buildSearchIntentQuery(q);
+    const qLower = normalizeLower(qIntent);
 
     const metadataRows = await this.prisma.$queryRawUnsafe(
       `
@@ -95,8 +134,8 @@ export class SearchService {
       ORDER BY metadata_score DESC
       LIMIT $4;
       `,
-      q,
-      `%${q}%`,
+      qIntent,
+      `%${qIntent}%`,
       `%${qLower}%`,
       limit * 3
     );
@@ -123,8 +162,8 @@ export class SearchService {
       ORDER BY transcript_score DESC
       LIMIT $3;
       `,
-      q,
-      `%${q}%`,
+      qIntent,
+      `%${qIntent}%`,
       limit * 3
     );
 
@@ -146,7 +185,7 @@ export class SearchService {
         });
       }
       if (openai?.isConfigured()) {
-        const queryEmbedding = await openai.createEmbedding(q, runtimeAiConfig.embeddingModel);
+        const queryEmbedding = await openai.createEmbedding(qIntent, runtimeAiConfig.embeddingModel);
         const vectorLiteral = `[${queryEmbedding.join(",")}]`;
         const semanticRows = await this.prisma.$queryRawUnsafe(
           `

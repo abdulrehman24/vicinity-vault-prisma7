@@ -4,10 +4,17 @@ import { env } from "../config/env";
 const DEFAULT_PROMPT =
   "In one short, punchy sentence, explain to a salesperson why this video is a good match for the client brief. Start with 'Matches because...'";
 const ALLOWED_EMBEDDING_MODELS = new Set(["text-embedding-3-small"]);
+const ALLOWED_TRANSCRIPTION_MODELS = new Set(["whisper-1", "gpt-4o-mini-transcribe", "gpt-4o-transcribe"]);
 
 const normalizeEmbeddingModel = (value, fallback) => {
   const model = String(value || "").trim();
   if (ALLOWED_EMBEDDING_MODELS.has(model)) return model;
+  return fallback;
+};
+
+const normalizeTranscriptionModel = (value, fallback) => {
+  const model = String(value || "").trim();
+  if (ALLOWED_TRANSCRIPTION_MODELS.has(model)) return model;
   return fallback;
 };
 
@@ -94,13 +101,18 @@ export class AdminAiConfigService {
 
   async getRuntimeConfig() {
     const config = await this.ensureConfig();
+    const configuredModel =
+      typeof config?.transcription_model === "string" ? config.transcription_model : null;
     return {
       openAiApiKey: decryptSecret(config.openai_api_key_encrypted) || env.openaiApiKey,
       embeddingModel: normalizeEmbeddingModel(
         config.embedding_model || env.openaiEmbeddingModel,
         "text-embedding-3-small"
       ),
-      transcriptionModel: env.openaiTranscriptionModel,
+      transcriptionModel: normalizeTranscriptionModel(
+        configuredModel || env.openaiTranscriptionModel,
+        "whisper-1"
+      ),
       explanationModel: config.explanation_model,
       matchSensitivity: Number(config.match_sensitivity),
       matchReasonPrompt: config.match_reason_prompt,

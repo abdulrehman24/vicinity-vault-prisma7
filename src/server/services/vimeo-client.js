@@ -32,9 +32,19 @@ const toIsoOrNull = (value) => {
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 };
 
+const normalizeAccessToken = (value) => {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+
+  // Accept either raw token or full "Bearer <token>" input from UI/env.
+  const unquoted = raw.replace(/^["']|["']$/g, "");
+  return unquoted.replace(/^Bearer\s+/i, "").trim() || null;
+};
+
 export class VimeoClient {
-  constructor(accessToken = env.vimeoAccessToken) {
-    this.accessToken = accessToken;
+  constructor(accessToken = env.vimeoAccessToken, logger = console) {
+    this.accessToken = normalizeAccessToken(accessToken);
+    this.logger = logger;
   }
 
   isConfigured() {
@@ -46,6 +56,7 @@ export class VimeoClient {
       throw new Error("VIMEO_ACCESS_TOKEN is missing.");
     }
 
+    this.logger.debug?.("Vimeo request started", { path, method: init.method || "GET" });
     const response = await fetch(`${VIMEO_API_BASE}${path}`, {
       ...init,
       headers: {
@@ -57,9 +68,16 @@ export class VimeoClient {
 
     if (!response.ok) {
       const body = await response.text();
+      this.logger.error?.("Vimeo request failed", {
+        path,
+        status: response.status,
+        statusText: response.statusText,
+        responseBody: body
+      });
       throw new Error(`Vimeo API ${response.status} ${response.statusText}: ${body}`);
     }
 
+    this.logger.debug?.("Vimeo request succeeded", { path, status: response.status });
     return response.json();
   }
 
@@ -89,6 +107,11 @@ export class VimeoClient {
     while (hasMore && pagesFetched < maxPages) {
       const payload = await this.request(`/me/videos?per_page=${perPage}&page=${currentPage}&fields=${encodeURIComponent(fields)}`);
       const data = Array.isArray(payload?.data) ? payload.data : [];
+      this.logger.info?.("Fetched Vimeo videos page", {
+        page: currentPage,
+        perPage,
+        received: data.length
+      });
 
       for (const item of data) {
         const videoId = extractVideoIdFromUri(item.uri);
@@ -115,6 +138,10 @@ export class VimeoClient {
       hasMore = Boolean(payload?.paging?.next) && data.length > 0;
     }
 
+    this.logger.info?.("Completed Vimeo videos fetch", {
+      totalFetched: videos.length,
+      pagesFetched
+    });
     return videos;
   }
 

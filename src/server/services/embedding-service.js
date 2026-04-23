@@ -21,12 +21,17 @@ export class EmbeddingService {
 
   async embedVideo({ videoId, summaryText }) {
     const clean = String(summaryText || "").trim();
-    if (!clean) return { skipped: true, reason: "empty_video_summary" };
+    if (!clean) {
+      this.logger.warn("Video metadata embedding skipped: empty summary", { videoId });
+      return { skipped: true, reason: "empty_video_summary" };
+    }
 
     if (!this.openAiService.isConfigured()) {
+      this.logger.warn("Video metadata embedding skipped: missing OpenAI key", { videoId });
       return { skipped: true, reason: "missing_openai_key" };
     }
 
+    this.logger.info("Video metadata embedding started", { videoId });
     const vector = await this.openAiService.createEmbedding(clean);
     await this.upsertEmbedding({
       scope: embedding_scope.video_metadata,
@@ -36,6 +41,7 @@ export class EmbeddingService {
       transcriptChunkId: null,
       checksum: createChecksum(clean)
     });
+    this.logger.info("Video metadata embedding saved", { videoId });
     return { skipped: false };
   }
 
@@ -44,13 +50,25 @@ export class EmbeddingService {
       where: { transcript_id: transcriptId },
       select: {
         id: true,
-        content: true
+        content: true,
+        video_id: true
       },
       orderBy: { chunk_index: "asc" }
     });
 
-    if (!chunks.length) return { embedded: 0, skipped: true, reason: "no_chunks" };
-    if (!this.openAiService.isConfigured()) return { embedded: 0, skipped: true, reason: "missing_openai_key" };
+    if (!chunks.length) {
+      this.logger.warn("Transcript chunk embeddings skipped: no chunks", { transcriptId });
+      return { embedded: 0, skipped: true, reason: "no_chunks" };
+    }
+    if (!this.openAiService.isConfigured()) {
+      this.logger.warn("Transcript chunk embeddings skipped: missing OpenAI key", { transcriptId });
+      return { embedded: 0, skipped: true, reason: "missing_openai_key" };
+    }
+
+    this.logger.info("Transcript chunk embeddings started", {
+      transcriptId,
+      chunksCount: chunks.length
+    });
 
     let embedded = 0;
     for (const chunk of chunks) {
@@ -62,16 +80,24 @@ export class EmbeddingService {
           scope: embedding_scope.transcript_chunk,
           model: resolveEmbeddingModelEnum(this.openAiService?.embeddingModel),
           vector,
-          videoId: null,
+          videoId: chunk.video_id || null,
           transcriptChunkId: chunk.id,
           checksum: createChecksum(clean)
         });
         embedded += 1;
+        this.logger.debug("Transcript chunk embedding saved", {
+          transcriptId,
+          chunkId: chunk.id
+        });
       } catch (error) {
         this.logger.warn("Chunk embedding failed", { chunkId: chunk.id, error: error.message });
       }
     }
 
+    this.logger.info("Transcript chunk embeddings completed", {
+      transcriptId,
+      embedded
+    });
     return { embedded, skipped: false };
   }
 
@@ -115,11 +141,12 @@ export class EmbeddingService {
       await this.prisma.$executeRawUnsafe(
         `
         INSERT INTO "embeddings" ("id","scope","model","embedding","video_id","transcript_chunk_id","checksum","created_at")
-        VALUES (gen_random_uuid(), $1::"embedding_scope", $2::"embedding_model", $3::vector, NULL, $4::uuid, $5, now());
+        VALUES (gen_random_uuid(), $1::"embedding_scope", $2::"embedding_model", $3::vector, $4::uuid, $5::uuid, $6, now());
       `,
         scope,
         model,
         vectorLiteral,
+        videoId,
         transcriptChunkId,
         checksum
       );

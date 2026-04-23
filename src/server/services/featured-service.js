@@ -20,18 +20,7 @@ export class FeaturedService {
     );
 
     const ids = (favoritesRanked || []).map((row) => row.id);
-    if (ids.length > 0) {
-      return ids;
-    }
-
-    const fallbackRows = await this.prisma.videos.findMany({
-      where: { status: "active" },
-      orderBy: [{ published_at: "desc" }, { created_at: "desc" }],
-      take: limit,
-      select: { id: true }
-    });
-
-    return fallbackRows.map((row) => row.id);
+    return ids;
   }
 
   async countFeatured(limit = 24) {
@@ -53,7 +42,7 @@ export class FeaturedService {
     return videos.map((video) =>
       toVideoCardDto(video, {
         matchScore: 0.85,
-        matchReason: "Featured because it is currently prioritized by engagement and curation signals."
+        matchReason: "Featured because it is currently prioritized by engagement signals."
       })
     );
   }

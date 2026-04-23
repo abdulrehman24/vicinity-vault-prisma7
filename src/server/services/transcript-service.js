@@ -26,9 +26,36 @@ export class TranscriptService {
   }
 
   async processVideoTranscript(videoRecord) {
+    this.logger.info("Transcript processing started", {
+      videoId: videoRecord.id,
+      vimeoVideoId: videoRecord.vimeo_video_id
+    });
     try {
+      const existingComplete = await this.getExistingCompletedTranscript(videoRecord.id);
+      if (existingComplete) {
+        this.logger.info("Transcript skipped: already completed in DB", {
+          videoId: videoRecord.id,
+          transcriptId: existingComplete.id,
+          source: existingComplete.source,
+          version: existingComplete.version,
+          chunksCount: existingComplete.chunksCount
+        });
+        return {
+          transcriptId: existingComplete.id,
+          chunksCount: existingComplete.chunksCount,
+          source: existingComplete.source,
+          skipped: true,
+          reason: "already_complete"
+        };
+      }
+
       const vimeoTranscript = await this.tryVimeoTranscript(videoRecord);
       if (vimeoTranscript) {
+        this.logger.info("Using Vimeo transcript", {
+          videoId: videoRecord.id,
+          languageCode: vimeoTranscript.languageCode,
+          segmentCount: vimeoTranscript.segments.length
+        });
         const transcriptId = await this.persistTranscript({
           videoId: videoRecord.id,
           source: transcript_source.vimeo,
@@ -39,9 +66,17 @@ export class TranscriptService {
 
         const chunks = chunkSegments(vimeoTranscript.segments);
         await this.persistChunks({ transcriptId, videoId: videoRecord.id, chunks });
+        this.logger.info("Transcript persisted from Vimeo", {
+          videoId: videoRecord.id,
+          transcriptId,
+          chunksCount: chunks.length
+        });
         return { transcriptId, chunksCount: chunks.length, source: "vimeo", skipped: false };
       }
 
+      this.logger.info("No Vimeo transcript found, trying OpenAI fallback", {
+        videoId: videoRecord.id
+      });
       return this.tryOpenAiTranscript(videoRecord);
     } catch (error) {
       this.logger.error("Transcript processing failed", {
@@ -56,6 +91,11 @@ export class TranscriptService {
     if (!this.vimeoClient.isConfigured()) return null;
 
     const tracks = await this.vimeoClient.listTextTracks(videoRecord.vimeo_video_id);
+    this.logger.debug("Fetched Vimeo text tracks", {
+      videoId: videoRecord.id,
+      vimeoVideoId: videoRecord.vimeo_video_id,
+      tracksCount: tracks.length
+    });
     const track = pickBestVimeoTrack(tracks);
     if (!track?.link) return null;
 
@@ -72,6 +112,9 @@ export class TranscriptService {
 
   async tryOpenAiTranscript(videoRecord) {
     if (!this.openAiService.isConfigured()) {
+      this.logger.warn("OpenAI transcript skipped: missing API key", {
+        videoId: videoRecord.id
+      });
       await this.persistTranscript({
         videoId: videoRecord.id,
         source: transcript_source.openai,
@@ -85,6 +128,9 @@ export class TranscriptService {
 
     const mediaUrl = videoRecord?.metadata_json?.download_link || videoRecord.video_url;
     if (!mediaUrl) {
+      this.logger.warn("OpenAI transcript skipped: missing media URL", {
+        videoId: videoRecord.id
+      });
       await this.persistTranscript({
         videoId: videoRecord.id,
         source: transcript_source.openai,
@@ -97,9 +143,14 @@ export class TranscriptService {
     }
 
     try {
-      const transcription = await this.openAiService.transcribeFromUrl({
+      this.logger.info("OpenAI transcription started", {
+        videoId: videoRecord.id,
+        model: this.openAiService.transcriptionModel
+      });
+      const transcription = await this.openAiService.transcribeChunkedFromUrl({
         mediaUrl,
-        filename: `${videoRecord.vimeo_video_id}.mp4`
+        filename: `${videoRecord.vimeo_video_id}.mp4`,
+        logger: this.logger
       });
 
       const segments = Array.isArray(transcription.segments) && transcription.segments.length > 0
@@ -121,8 +172,38 @@ export class TranscriptService {
 
       const chunks = chunkSegments(segments);
       await this.persistChunks({ transcriptId, videoId: videoRecord.id, chunks });
+      this.logger.info("OpenAI transcription completed", {
+        videoId: videoRecord.id,
+        transcriptId,
+        chunksCount: chunks.length,
+        failedChunks: transcription.failedChunks?.length || 0,
+        model: transcription.model
+      });
       return { transcriptId, chunksCount: chunks.length, source: "openai", skipped: false };
     } catch (error) {
+      const openAiMeta =
+        error?.meta ||
+        error?.cause?.meta ||
+        (error?.cause && typeof error.cause === "object"
+          ? {
+              name: error.cause.name || null,
+              status: Number.isFinite(error.cause.status) ? error.cause.status : null,
+              requestId:
+                error.cause.request_id ||
+                error.cause?.headers?.["x-request-id"] ||
+                error.cause?.headers?.["X-Request-Id"] ||
+                null,
+              type: error.cause.type || error.cause?.error?.type || null,
+              code: error.cause.code || error.cause?.error?.code || null,
+              message: error.cause.message || error.cause?.error?.message || null,
+              responseBody: error.cause?.error || null
+            }
+          : null);
+      this.logger.error("OpenAI transcription failed", {
+        videoId: videoRecord.id,
+        error: error.message,
+        openAi: openAiMeta
+      });
       await this.persistTranscript({
         videoId: videoRecord.id,
         source: transcript_source.openai,
@@ -135,39 +216,97 @@ export class TranscriptService {
     }
   }
 
-  async persistTranscript({ videoId, source, languageCode, status, text, errorMessage = null }) {
-    await this.prisma.transcripts.updateMany({
+  async getExistingCompletedTranscript(videoId) {
+    const existing = await this.prisma.transcripts.findFirst({
       where: {
         video_id: videoId,
-        language_code: languageCode,
+        status: transcript_status.complete,
         is_active: true
       },
-      data: { is_active: false, updated_at: new Date() }
+      orderBy: [{ version: "desc" }, { updated_at: "desc" }],
+      select: {
+        id: true,
+        source: true,
+        version: true
+      }
     });
 
-    const maxVersion = await this.prisma.transcripts.aggregate({
+    if (!existing) return null;
+
+    const chunksCount = await this.prisma.transcript_chunks.count({
+      where: { transcript_id: existing.id }
+    });
+
+    return {
+      ...existing,
+      chunksCount
+    };
+  }
+
+  async persistTranscript({ videoId, source, languageCode, status, text, errorMessage = null }) {
+    const now = new Date();
+    const existing = await this.prisma.transcripts.findFirst({
       where: {
         video_id: videoId,
         source,
         language_code: languageCode
       },
-      _max: { version: true }
+      orderBy: [{ updated_at: "desc" }, { created_at: "desc" }],
+      select: { id: true, version: true }
     });
 
-    const transcript = await this.prisma.transcripts.create({
-      data: {
-        video_id: videoId,
-        source,
-        status,
-        language_code: languageCode,
-        raw_text: text,
-        error_message: errorMessage,
-        is_active: status === transcript_status.complete,
-        version: (maxVersion._max.version || 0) + 1,
-        generated_at: new Date()
-      }
-    });
+    let transcript;
+    if (existing) {
+      transcript = await this.prisma.transcripts.update({
+        where: { id: existing.id },
+        data: {
+          status,
+          raw_text: text,
+          error_message: errorMessage,
+          is_active: status === transcript_status.complete,
+          generated_at: now,
+          updated_at: now
+        }
+      });
+    } else {
+      transcript = await this.prisma.transcripts.create({
+        data: {
+          video_id: videoId,
+          source,
+          status,
+          language_code: languageCode,
+          raw_text: text,
+          error_message: errorMessage,
+          is_active: status === transcript_status.complete,
+          version: 1,
+          generated_at: now
+        }
+      });
+    }
 
+    if (status === transcript_status.complete) {
+      await this.prisma.transcripts.updateMany({
+        where: {
+          video_id: videoId,
+          language_code: languageCode,
+          is_active: true,
+          id: { not: transcript.id }
+        },
+        data: {
+          is_active: false,
+          updated_at: now
+        }
+      });
+    }
+
+    this.logger.debug("Transcript row saved", {
+      videoId,
+      transcriptId: transcript.id,
+      source,
+      status,
+      languageCode,
+      version: transcript.version
+    });
     return transcript.id;
   }
 
@@ -189,6 +328,12 @@ export class TranscriptService {
         end_seconds: chunk.endSeconds,
         token_count: chunk.tokenCount
       }))
+    });
+
+    this.logger.debug("Transcript chunks saved", {
+      videoId,
+      transcriptId,
+      chunksCount: chunks.length
     });
   }
 }

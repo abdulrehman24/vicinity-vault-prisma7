@@ -12,6 +12,7 @@ export default function AdminPage() {
   const [isRebuildingEmbeddings, setIsRebuildingEmbeddings] = useState(false);
   const [retryingRunId, setRetryingRunId] = useState(null);
   const [sourceRebuildId, setSourceRebuildId] = useState(null);
+  const [sourceTestId, setSourceTestId] = useState(null);
   const [isAddingSource, setIsAddingSource] = useState(false);
   const [isDeletingSource, setIsDeletingSource] = useState(false);
   const [saveStatus, setSaveStatus] = useState("");
@@ -294,6 +295,26 @@ export default function AdminPage() {
     } catch (error) {
       setPageError(error.message);
       toast.error(error.message || "Source sync failed");
+    }
+  };
+
+  const handleSourceTest = async (sourceId) => {
+    try {
+      resetMessages();
+      setSourceTestId(sourceId);
+      toast.message("Testing source token...");
+      const payload = await apiFetch(`/api/admin/sources/${sourceId}/test`, {
+        method: "POST",
+        body: JSON.stringify({})
+      });
+      const accountName = payload?.result?.accountName;
+      setPageSuccess(accountName ? `Source token valid (${accountName}).` : "Source token is valid.");
+      toast.success(accountName ? `Source connected: ${accountName}` : "Source token is valid");
+    } catch (error) {
+      setPageError(error.message);
+      toast.error(error.message || "Source token test failed");
+    } finally {
+      setSourceTestId(null);
     }
   };
 
@@ -781,6 +802,14 @@ export default function AdminPage() {
                     <td className="px-10 py-6 text-vicinity-peach font-bold">{Number(source.videoCount || 0).toLocaleString()}</td>
                     <td className="px-10 py-6 text-right">
                       <div className="flex justify-end gap-2">
+                        <button
+                          onClick={() => handleSourceTest(source.id)}
+                          disabled={sourceTestId === source.id}
+                          className="p-2 text-white/20 hover:text-emerald-300 transition-colors disabled:opacity-50"
+                          title="Test Token"
+                        >
+                          <SafeIcon name={sourceTestId === source.id ? "Loader2" : "ShieldCheck"} className={sourceTestId === source.id ? "animate-spin" : ""} />
+                        </button>
                         <button onClick={() => handleSourceSync(source.id)} className="p-2 text-white/20 hover:text-vicinity-peach transition-colors" title="Sync Source"><SafeIcon name="RefreshCw" /></button>
                         <button
                           onClick={() => handleSourceRebuildEmbeddings(source.id)}
