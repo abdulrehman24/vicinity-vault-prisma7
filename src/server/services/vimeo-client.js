@@ -41,6 +41,23 @@ const normalizeAccessToken = (value) => {
   return unquoted.replace(/^Bearer\s+/i, "").trim() || null;
 };
 
+const VIDEO_FIELDS = [
+  "uri",
+  "name",
+  "description",
+  "duration",
+  "created_time",
+  "release_time",
+  "link",
+  "tags.name",
+  "pictures.sizes.link",
+  "privacy.view",
+  "parent_folder.name",
+  "metadata.connections.texttracks.uri",
+  "download.link",
+  "download.type"
+].join(",");
+
 export class VimeoClient {
   constructor(accessToken = env.vimeoAccessToken, logger = console) {
     this.accessToken = normalizeAccessToken(accessToken);
@@ -83,22 +100,6 @@ export class VimeoClient {
 
   async listVideos({ page = 1, perPage = 50, maxPages = 0 } = {}) {
     const videos = [];
-    const fields = [
-      "uri",
-      "name",
-      "description",
-      "duration",
-      "created_time",
-      "release_time",
-      "link",
-      "tags.name",
-      "pictures.sizes.link",
-      "privacy.view",
-      "parent_folder.name",
-      "metadata.connections.texttracks.uri",
-      "download.link",
-      "download.type"
-    ].join(",");
 
     const pageLimit = Number(maxPages);
     const maxPageCount = Number.isFinite(pageLimit) && pageLimit > 0 ? pageLimit : Number.POSITIVE_INFINITY;
@@ -108,37 +109,12 @@ export class VimeoClient {
     let hasMore = true;
 
     while (hasMore && pagesFetched < maxPageCount) {
-      const payload = await this.request(`/me/videos?per_page=${perPage}&page=${currentPage}&fields=${encodeURIComponent(fields)}`);
-      const data = Array.isArray(payload?.data) ? payload.data : [];
-      this.logger.info?.("Fetched Vimeo videos page", {
-        page: currentPage,
-        perPage,
-        received: data.length
-      });
-
-      for (const item of data) {
-        const videoId = extractVideoIdFromUri(item.uri);
-        if (!videoId) continue;
-
-        videos.push({
-          vimeoVideoId: videoId,
-          vimeoUri: item.uri || null,
-          title: item.name || `Vimeo Video ${videoId}`,
-          description: item.description || null,
-          durationSeconds: Number.isFinite(item.duration) ? item.duration : null,
-          publishedAt: toIsoOrNull(item.release_time || item.created_time),
-          thumbnailUrl: pickThumbnail(item.pictures),
-          videoUrl: item.link || `https://vimeo.com/${videoId}`,
-          folderName: item.parent_folder?.name || null,
-          privacyView: item.privacy?.view || null,
-          tags: parseTags(item.tags),
-          raw: item
-        });
-      }
+      const pageResult = await this.listVideosPage({ page: currentPage, perPage });
+      videos.push(...pageResult.videos);
 
       pagesFetched += 1;
       currentPage += 1;
-      hasMore = Boolean(payload?.paging?.next) && data.length > 0;
+      hasMore = pageResult.hasMore;
     }
 
     this.logger.info?.("Completed Vimeo videos fetch", {
@@ -147,6 +123,46 @@ export class VimeoClient {
       maxPagesRequested: Number.isFinite(pageLimit) ? pageLimit : null
     });
     return videos;
+  }
+
+  async listVideosPage({ page = 1, perPage = 50 } = {}) {
+    const payload = await this.request(`/me/videos?per_page=${perPage}&page=${page}&fields=${encodeURIComponent(VIDEO_FIELDS)}`);
+    const data = Array.isArray(payload?.data) ? payload.data : [];
+    this.logger.info?.("Fetched Vimeo videos page", {
+      page,
+      perPage,
+      received: data.length
+    });
+
+    const videos = [];
+    for (const item of data) {
+      const videoId = extractVideoIdFromUri(item.uri);
+      if (!videoId) continue;
+
+      videos.push({
+        vimeoVideoId: videoId,
+        vimeoUri: item.uri || null,
+        title: item.name || `Vimeo Video ${videoId}`,
+        description: item.description || null,
+        durationSeconds: Number.isFinite(item.duration) ? item.duration : null,
+        publishedAt: toIsoOrNull(item.release_time || item.created_time),
+        thumbnailUrl: pickThumbnail(item.pictures),
+        videoUrl: item.link || `https://vimeo.com/${videoId}`,
+        folderName: item.parent_folder?.name || null,
+        privacyView: item.privacy?.view || null,
+        tags: parseTags(item.tags),
+        raw: item
+      });
+    }
+
+    const parsedTotal = Number(payload?.total);
+    const totalCount = Number.isFinite(parsedTotal) && parsedTotal >= 0 ? Math.floor(parsedTotal) : null;
+
+    return {
+      videos,
+      hasMore: Boolean(payload?.paging?.next) && data.length > 0,
+      totalCount
+    };
   }
 
   async listTextTracks(vimeoVideoId) {

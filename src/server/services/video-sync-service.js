@@ -241,6 +241,7 @@ export class VideoSyncService {
       transcriptsProcessed: 0,
       embeddingsCreated: 0
     };
+    let progressTotalVideos = null;
     let lastProgressFlushAt = 0;
     let flushQueue = Promise.resolve();
 
@@ -258,7 +259,7 @@ export class VideoSyncService {
         where: { id: syncRun.id },
         data: {
           status: sync_run_status.running,
-          videos_scanned: counters.scanned,
+          videos_scanned: progressTotalVideos ?? counters.scanned,
           videos_deleted: counters.processed,
           videos_created: counters.created,
           videos_updated: counters.updated,
@@ -290,7 +291,11 @@ export class VideoSyncService {
         throw new Error(`Data source ${dataSource.id} has no Vimeo access token configured.`);
       }
 
-      const videos = await vimeoClient.listVideos({ perPage, maxPages });
+      const requestedMaxPages = Number(maxPages);
+      const maxPageCount =
+        Number.isFinite(requestedMaxPages) && requestedMaxPages > 0
+          ? Math.floor(requestedMaxPages)
+          : Number.POSITIVE_INFINITY;
       const configuredTestLimit = Number(process.env.SYNC_TEST_VIDEO_LIMIT || "");
       const requestedTestLimit = Number(testVideoLimit);
       const effectiveTestLimit =
@@ -299,22 +304,6 @@ export class VideoSyncService {
           : Number.isFinite(configuredTestLimit) && configuredTestLimit > 0
           ? Math.floor(configuredTestLimit)
           : null;
-      const videosToProcess = effectiveTestLimit ? videos.slice(0, effectiveTestLimit) : videos;
-
-      if (effectiveTestLimit && videos.length > effectiveTestLimit) {
-        runLogger.warn("Test video limit applied to fetched videos", {
-          fetched: videos.length,
-          processing: videosToProcess.length,
-          testVideoLimit: effectiveTestLimit
-        });
-      }
-
-      runLogger.info("Fetched videos for processing", {
-        fetched: videos.length,
-        processing: videosToProcess.length
-      });
-      counters.scanned = videosToProcess.length;
-      await queueRunProgressFlush({ force: true });
 
       const configuredConcurrency = Number(process.env.SYNC_CONCURRENCY || "");
       const workerCount = Math.max(
@@ -326,12 +315,9 @@ export class VideoSyncService {
             : DEFAULT_SYNC_CONCURRENCY
         )
       );
-      runLogger.info("Video processing workers started", {
-        workerCount,
-        queueLength: videosToProcess.length
+      runLogger.info("Video processing workers configured", {
+        workerCount
       });
-
-      let nextVideoIndex = 0;
 
       const processSingleVideo = async (vimeoVideo) => {
         runLogger.info("Processing video started", {
@@ -496,25 +482,89 @@ export class VideoSyncService {
         }
       };
 
-      const workers = Array.from({ length: Math.min(workerCount, videosToProcess.length || 1) }, (_, workerIndex) =>
-        (async () => {
-          while (true) {
-            const currentIndex = nextVideoIndex;
-            nextVideoIndex += 1;
-            if (currentIndex >= videosToProcess.length) return;
-            const vimeoVideo = videosToProcess[currentIndex];
-            runLogger.debug("Worker picked video", {
-              workerIndex: workerIndex + 1,
-              queueIndex: currentIndex + 1,
-              queueLength: videosToProcess.length,
-              vimeoVideoId: vimeoVideo.vimeoVideoId
-            });
-            await processSingleVideo(vimeoVideo);
-          }
-        })()
-      );
+      const processVideoBatch = async ({ videos, page }) => {
+        if (!videos.length) return;
+        let nextVideoIndex = 0;
+        const workers = Array.from({ length: Math.min(workerCount, videos.length) }, (_, workerIndex) =>
+          (async () => {
+            while (true) {
+              const currentIndex = nextVideoIndex;
+              nextVideoIndex += 1;
+              if (currentIndex >= videos.length) return;
+              const vimeoVideo = videos[currentIndex];
+              runLogger.debug("Worker picked video", {
+                workerIndex: workerIndex + 1,
+                page,
+                queueIndex: currentIndex + 1,
+                queueLength: videos.length,
+                vimeoVideoId: vimeoVideo.vimeoVideoId
+              });
+              await processSingleVideo(vimeoVideo);
+            }
+          })()
+        );
+        await Promise.all(workers);
+      };
 
-      await Promise.all(workers);
+      let currentPage = 1;
+      let pagesFetched = 0;
+      let hasMore = true;
+      let remainingTestLimit = effectiveTestLimit;
+
+      while (hasMore && pagesFetched < maxPageCount) {
+        const pageResult = await vimeoClient.listVideosPage({ page: currentPage, perPage });
+        const fetchedVideos = pageResult.videos;
+        let videosToProcess = fetchedVideos;
+
+        if (progressTotalVideos === null && Number.isFinite(pageResult.totalCount)) {
+          progressTotalVideos = effectiveTestLimit
+            ? Math.min(pageResult.totalCount, effectiveTestLimit)
+            : pageResult.totalCount;
+          runLogger.info("Detected Vimeo total video count for progress", {
+            totalFromApi: pageResult.totalCount,
+            progressTotalVideos
+          });
+        }
+
+        if (remainingTestLimit !== null) {
+          if (remainingTestLimit <= 0) break;
+          if (videosToProcess.length > remainingTestLimit) {
+            videosToProcess = videosToProcess.slice(0, remainingTestLimit);
+            runLogger.warn("Test video limit applied to page", {
+              page: currentPage,
+              fetched: fetchedVideos.length,
+              processing: videosToProcess.length,
+              remainingBeforePage: remainingTestLimit,
+              testVideoLimit: effectiveTestLimit
+            });
+          }
+          remainingTestLimit -= videosToProcess.length;
+        }
+
+        counters.scanned += videosToProcess.length;
+        runLogger.info("Fetched page queued for immediate processing", {
+          page: currentPage,
+          fetched: fetchedVideos.length,
+          processing: videosToProcess.length,
+          scannedSoFar: counters.scanned,
+          progressTotalVideos: progressTotalVideos ?? null
+        });
+        await queueRunProgressFlush({ force: true });
+
+        await processVideoBatch({ videos: videosToProcess, page: currentPage });
+
+        pagesFetched += 1;
+        hasMore = pageResult.hasMore;
+        currentPage += 1;
+      }
+
+      runLogger.info("Completed paged fetch and processing", {
+        pagesFetched,
+        hasMore,
+        testVideoLimit: effectiveTestLimit,
+        scanned: counters.scanned,
+        processed: counters.processed
+      });
 
       await queueRunProgressFlush({ force: true });
       await this.prisma.sync_runs.update({
@@ -522,7 +572,7 @@ export class VideoSyncService {
         data: {
           status: counters.failed > 0 ? sync_run_status.partial : sync_run_status.success,
           finished_at: new Date(),
-          videos_scanned: counters.scanned,
+          videos_scanned: progressTotalVideos ?? counters.scanned,
           videos_deleted: counters.processed,
           videos_created: counters.created,
           videos_updated: counters.updated,
@@ -556,7 +606,7 @@ export class VideoSyncService {
         data: {
           status: sync_run_status.failed,
           finished_at: new Date(),
-          videos_scanned: counters.scanned,
+          videos_scanned: progressTotalVideos ?? counters.scanned,
           videos_deleted: counters.processed,
           videos_created: counters.created,
           videos_updated: counters.updated,

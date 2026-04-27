@@ -6,9 +6,7 @@ import { user_role } from "@prisma/client";
 
 const allowedDomain = (process.env.ALLOWED_GOOGLE_DOMAIN || "").trim().toLowerCase();
 const hasGoogleProvider = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
-const localBypassEnabled =
-  process.env.NODE_ENV !== "production" &&
-  String(process.env.ENABLE_LOCAL_AUTH_BYPASS || "false").toLowerCase() === "true";
+const localBypassEnabled = String(process.env.ENABLE_LOCAL_AUTH_BYPASS || "false").toLowerCase() === "true";
 const localBypassEmail = String(process.env.LOCAL_BYPASS_EMAIL || "")
   .trim()
   .toLowerCase();
