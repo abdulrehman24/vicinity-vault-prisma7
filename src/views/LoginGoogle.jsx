@@ -11,7 +11,7 @@ export default function LoginGoogle() {
   const [hasGoogleProvider, setHasGoogleProvider] = useState(true);
   const [hasLocalBypassProvider, setHasLocalBypassProvider] = useState(false);
   const searchParams = useSearchParams();
-  const { status } = useSession();
+  const { status, data: session } = useSession();
   const nextUrl = searchParams.get("next") || "/search";
 
   const errorMessage = useMemo(() => {
@@ -46,10 +46,10 @@ export default function LoginGoogle() {
   }, []);
 
   useEffect(() => {
-    if (status === "authenticated") {
+    if (status === "authenticated" && session?.user?.id) {
       window.location.href = nextUrl;
     }
-  }, [status, nextUrl]);
+  }, [status, session, nextUrl]);
 
   const handleGoogleSignIn = async () => {
     if (!hasGoogleProvider || isSubmitting) return;

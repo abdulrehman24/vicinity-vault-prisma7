@@ -21,7 +21,7 @@ export async function middleware(request) {
   } catch (_error) {
     token = null;
   }
-  const isLoggedIn = Boolean(token?.uid);
+  const isLoggedIn = Boolean(token?.uid || token?.sub);
   const isAdmin = token?.role === "admin";
 
   if (pathname === "/login" && isLoggedIn) {

@@ -176,6 +176,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (user?.id) {
         token.uid = user.id;
       }
+      if (!token.uid && token?.sub) {
+        token.uid = token.sub;
+      }
       if (user?.role) {
         token.role = user.role;
       }
@@ -191,7 +194,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (!session.user) {
         session.user = {};
       }
-      session.user.id = token.uid || null;
+      session.user.id = token.uid || token.sub || null;
       session.user.role = token.role || user_role.user;
       session.user.isActive = token.isActive !== false;
       return session;
