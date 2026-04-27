@@ -4,6 +4,15 @@ const asOptional = (value) => {
   return trimmed.length > 0 ? trimmed : null;
 };
 
+const asBoolean = (value, fallback = false) => {
+  if (typeof value === "undefined" || value === null) return fallback;
+  const normalized = String(value).trim().toLowerCase();
+  if (!normalized) return fallback;
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return fallback;
+};
+
 const defaultEmbeddingModel = "text-embedding-3-small";
 const defaultTranscriptionModel = "whisper-1";
 
@@ -17,7 +26,8 @@ export const env = {
   googleClientSecret: asOptional(process.env.GOOGLE_CLIENT_SECRET),
   nextAuthUrl: asOptional(process.env.NEXTAUTH_URL),
   nextAuthSecret: asOptional(process.env.NEXTAUTH_SECRET),
-  allowedGoogleDomain: asOptional(process.env.ALLOWED_GOOGLE_DOMAIN)
+  allowedGoogleDomain: asOptional(process.env.ALLOWED_GOOGLE_DOMAIN),
+  enableSyncFileLogs: asBoolean(process.env.ENABLE_SYNC_FILE_LOGS, true)
 };
 
 export const hasVimeoToken = () => Boolean(env.vimeoAccessToken);

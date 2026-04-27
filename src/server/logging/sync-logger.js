@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
+import { env } from "../config/env";
 
 const LOG_DIR = path.join(process.cwd(), "logs");
 const LOG_FILE = path.join(LOG_DIR, "sync-process.log");
+const syncFileLoggingEnabled = Boolean(env.enableSyncFileLogs);
 
 const ensureLogFile = () => {
   if (!fs.existsSync(LOG_DIR)) {
@@ -23,6 +25,7 @@ const serializeMeta = (meta) => {
 };
 
 const writeLine = (line) => {
+  if (!syncFileLoggingEnabled) return;
   ensureLogFile();
   fs.appendFileSync(LOG_FILE, `${line}\n`, "utf8");
 };
@@ -59,9 +62,8 @@ export const createSyncLogger = (baseContext = {}) => {
     error: (message, meta) => log("error", message, meta),
     debug: (message, meta) => log("debug", message, meta),
     child: (extra = {}) => createSyncLogger({ ...context, ...safeMeta(extra) }),
-    filePath: LOG_FILE
+    filePath: syncFileLoggingEnabled ? LOG_FILE : null
   };
 };
 
-export const syncLogFilePath = LOG_FILE;
-
+export const syncLogFilePath = syncFileLoggingEnabled ? LOG_FILE : null;
