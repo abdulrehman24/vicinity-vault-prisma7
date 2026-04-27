@@ -10,7 +10,8 @@ const main = async () => {
   const baseUrl = parseArg("baseUrl", process.env.SYNC_BASE_URL || "http://localhost:3000");
   const dataSourceId = parseArg("dataSourceId", null);
   const perPage = Number(parseArg("perPage", "50"));
-  const maxPages = Number(parseArg("maxPages", "1"));
+  const maxPages = Number(parseArg("maxPages", "0"));
+  const testVideoLimit = Number(parseArg("testVideoLimit", ""));
 
   const response = await fetch(`${baseUrl}/api/internal/sync/videos`, {
     method: "POST",
@@ -18,7 +19,8 @@ const main = async () => {
     body: JSON.stringify({
       dataSourceId,
       perPage: Number.isFinite(perPage) ? perPage : 50,
-      maxPages: Number.isFinite(maxPages) ? maxPages : 1
+      maxPages: Number.isFinite(maxPages) ? maxPages : 0,
+      testVideoLimit: Number.isFinite(testVideoLimit) ? testVideoLimit : null
     })
   });
 

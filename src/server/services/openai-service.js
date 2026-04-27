@@ -87,6 +87,47 @@ const normalizeTranscriptionModel = (value) => {
 const resolveTranscriptionResponseFormat = (model) =>
   model === "whisper-1" ? "verbose_json" : "json";
 
+const normalizeTranscriptionOutput = (response) => {
+  const extractText = () => {
+    if (!response) return "";
+    if (typeof response === "string") return response.trim();
+
+    const direct =
+      (typeof response.text === "string" && response.text) ||
+      (typeof response.transcript === "string" && response.transcript) ||
+      (typeof response.output_text === "string" && response.output_text) ||
+      "";
+
+    if (direct) return direct.trim();
+
+    const altText = Array.isArray(response.output)
+      ? response.output
+          .flatMap((item) => {
+            if (typeof item?.text === "string") return [item.text];
+            if (Array.isArray(item?.content)) {
+              return item.content
+                .map((part) => (typeof part?.text === "string" ? part.text : ""))
+                .filter(Boolean);
+            }
+            return [];
+          })
+          .join(" ")
+      : "";
+    return String(altText || "").trim();
+  };
+
+  const segments = Array.isArray(response?.segments)
+    ? response.segments
+    : Array.isArray(response?.audio?.segments)
+    ? response.audio.segments
+    : [];
+
+  return {
+    text: extractText(),
+    segments
+  };
+};
+
 export class OpenAiService {
   constructor({ apiKey = env.openaiApiKey, embeddingModel = env.openaiEmbeddingModel, transcriptionModel = env.openaiTranscriptionModel } = {}) {
     this.apiKey = apiKey;
@@ -153,10 +194,7 @@ export class OpenAiService {
       throw wrapped;
     }
 
-    return {
-      text: response?.text || "",
-      segments: Array.isArray(response?.segments) ? response.segments : []
-    };
+    return normalizeTranscriptionOutput(response);
   }
 
   async transcribeChunkedFromUrl({
@@ -254,9 +292,16 @@ export class OpenAiService {
         .replace(/\s+/g, " ")
         .trim();
 
+      const normalizedSegments = mergedSegments.filter((segment) => segment.text);
+      if (!mergedText && normalizedSegments.length === 0 && failedChunks.length === chunks.length) {
+        throw new Error(
+          `OpenAI returned no transcript text: all ${chunks.length} chunks failed transcription.`
+        );
+      }
+
       return {
         text: mergedText,
-        segments: mergedSegments.filter((segment) => segment.text),
+        segments: normalizedSegments,
         failedChunks,
         model
       };
@@ -348,10 +393,7 @@ export class OpenAiService {
       throw wrapped;
     }
 
-    return {
-      text: response?.text || "",
-      segments: Array.isArray(response?.segments) ? response.segments : []
-    };
+    return normalizeTranscriptionOutput(response);
   }
 
   async generateMatchReasons({

@@ -8,6 +8,7 @@ export default function ConfirmDialog({
   description = "",
   confirmLabel = "Confirm",
   cancelLabel = "Cancel",
+  confirmingLabel = null,
   isConfirming = false,
   onCancel,
   onConfirm
@@ -42,7 +43,7 @@ export default function ConfirmDialog({
             disabled={isConfirming}
             className="flex-1 px-5 py-4 rounded-2xl bg-red-500 text-white font-black uppercase tracking-widest text-xs hover:bg-red-400 disabled:opacity-60"
           >
-            {isConfirming ? "Deleting..." : confirmLabel}
+            {isConfirming ? confirmingLabel || "Deleting..." : confirmLabel}
           </button>
         </div>
       </div>

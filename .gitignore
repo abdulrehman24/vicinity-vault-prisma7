@@ -12,3 +12,4 @@ pnpm-debug.log*
 !.env.example
 
 /src/generated/prisma
+/logs

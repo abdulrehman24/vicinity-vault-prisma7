@@ -13,6 +13,7 @@ export default function AdminPage() {
   const [retryingRunId, setRetryingRunId] = useState(null);
   const [sourceRebuildId, setSourceRebuildId] = useState(null);
   const [sourceTestId, setSourceTestId] = useState(null);
+  const [syncingSourceIds, setSyncingSourceIds] = useState([]);
   const [isAddingSource, setIsAddingSource] = useState(false);
   const [isDeletingSource, setIsDeletingSource] = useState(false);
   const [saveStatus, setSaveStatus] = useState("");
@@ -76,6 +77,8 @@ export default function AdminPage() {
     genreName: ""
   });
   const [isDeletingGenre, setIsDeletingGenre] = useState(false);
+  const [truncateConfirmOpen, setTruncateConfirmOpen] = useState(false);
+  const [isTruncatingData, setIsTruncatingData] = useState(false);
 
   const apiFetch = async (url, init = {}) => {
     const response = await fetch(url, {
@@ -160,6 +163,20 @@ export default function AdminPage() {
     load();
   }, [activeTab, syncErrorFilter]);
 
+  useEffect(() => {
+    if (activeTab !== "system") return;
+    const hasRunningRun = (systemData?.recentRuns || []).some((run) => run.status === "running");
+    if (!hasRunningRun) return;
+
+    const intervalId = window.setInterval(() => {
+      loadSystem().catch(() => {});
+    }, 5000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [activeTab, systemData?.recentRuns]);
+
   const stats = [
     {
       label: "Total Videos Indexed",
@@ -223,7 +240,7 @@ export default function AdminPage() {
       toast.message("Global sync started");
       await apiFetch("/api/admin/system/sync", { method: "POST", body: JSON.stringify({}) });
       setPageSuccess("Global sync triggered.");
-      toast.success("Sync completed");
+      toast.success("Sync triggered");
       await loadSources();
       await Promise.all([loadSystem(), loadSyncErrors(syncErrorFilter)]);
     } catch (error) {
@@ -286,15 +303,59 @@ export default function AdminPage() {
   const handleSourceSync = async (sourceId) => {
     try {
       resetMessages();
+      setSyncingSourceIds((prev) => (prev.includes(sourceId) ? prev : [...prev, sourceId]));
+      setSources((prev) =>
+        prev.map((source) =>
+          source.id === sourceId
+            ? {
+                ...source,
+                status: "syncing"
+              }
+            : source
+        )
+      );
+      setSystemData((prev) => {
+        const source = (sources || []).find((item) => item.id === sourceId);
+        const sourceName = source?.name || "Unknown";
+        const hasRunningForSource = (prev.recentRuns || []).some(
+          (run) => run.status === "running" && run.sourceName === sourceName
+        );
+        if (hasRunningForSource) return prev;
+        const localRun = {
+          id: `local-${sourceId}-${Date.now()}`,
+          sourceName,
+          status: "running",
+          trigger: "manual",
+          notes: null,
+          retryOfRunId: null,
+          createdAt: new Date().toISOString(),
+          finishedAt: null,
+          errorCount: 0,
+          videosScanned: 0,
+          videosProcessed: 0,
+          videosCreated: 0,
+          videosUpdated: 0,
+          embeddingsCreated: 0,
+          canRetry: false
+        };
+        return {
+          ...prev,
+          recentRuns: [localRun, ...(prev.recentRuns || [])].slice(0, 10)
+        };
+      });
       toast.message("Source sync started");
       await apiFetch(`/api/admin/sources/${sourceId}/sync`, { method: "POST", body: JSON.stringify({}) });
       setPageSuccess("Source sync started.");
-      toast.success("Source sync completed");
+      toast.success("Source sync triggered");
       await loadSources();
       await loadSystem();
     } catch (error) {
       setPageError(error.message);
       toast.error(error.message || "Source sync failed");
+      await loadSources();
+      await loadSystem();
+    } finally {
+      setSyncingSourceIds((prev) => prev.filter((id) => id !== sourceId));
     }
   };
 
@@ -468,6 +529,26 @@ export default function AdminPage() {
     }
   };
 
+  const handleTruncateData = async () => {
+    try {
+      setIsTruncatingData(true);
+      resetMessages();
+      await apiFetch("/api/admin/system/truncate", {
+        method: "POST",
+        body: JSON.stringify({})
+      });
+      setPageSuccess("Operational data truncated successfully.");
+      toast.success("Operational data truncated");
+      setTruncateConfirmOpen(false);
+      await Promise.all([loadSystem(), loadSyncErrors(syncErrorFilter), loadSources(), loadGenres()]);
+    } catch (error) {
+      setPageError(error.message);
+      toast.error(error.message || "Failed to truncate data");
+    } finally {
+      setIsTruncatingData(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-10 pb-20">
       <div className="bg-[#3d4a55] p-10 rounded-[3.5rem] border border-white/10 shadow-2xl">
@@ -587,6 +668,14 @@ export default function AdminPage() {
                 <SafeIcon name="RefreshCw" className={isSyncing ? "animate-spin" : ""} />
                 {isSyncing ? "Syncing All Vaults..." : "Manual Sync All"}
               </button>
+              <button
+                onClick={() => setTruncateConfirmOpen(true)}
+                disabled={isTruncatingData}
+                className="bg-red-500/20 border border-red-500/40 text-red-200 px-8 py-4 rounded-2xl font-black hover:bg-red-500/30 transition-all flex items-center justify-center gap-3 uppercase tracking-widest text-xs disabled:opacity-60"
+              >
+                <SafeIcon name="Trash2" className={isTruncatingData ? "animate-pulse" : ""} />
+                {isTruncatingData ? "Truncating..." : "Truncate Data"}
+              </button>
             </div>
           </div>
 
@@ -602,55 +691,64 @@ export default function AdminPage() {
                     <th className="px-8 py-4">Source</th>
                     <th className="px-8 py-4">Operation</th>
                     <th className="px-8 py-4">Status</th>
+                    <th className="px-8 py-4">Progress</th>
                     <th className="px-8 py-4">Errors</th>
                     <th className="px-8 py-4">Started</th>
                     <th className="px-8 py-4 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/5">
-                  {(systemData.recentRuns || []).map((run) => (
-                    <tr key={run.id} className="hover:bg-white/5 transition-colors">
-                      <td className="px-8 py-5 text-white font-bold">{run.sourceName}</td>
-                      <td className="px-8 py-5 text-white/50 font-black uppercase tracking-widest text-[10px]">
-                        {run.notes === "embedding_rebuild" ? "Embedding Rebuild" : "Vimeo Sync"}
-                      </td>
-                      <td className="px-8 py-5">
-                        <span
-                          className={`px-3 py-1 rounded-full text-[8px] font-black border uppercase tracking-widest ${
-                            run.status === "success"
-                              ? "bg-green-500/10 text-green-400 border-green-500/20"
-                              : run.status === "running"
-                              ? "bg-blue-500/10 text-blue-300 border-blue-500/20"
-                              : run.status === "partial"
-                              ? "bg-yellow-500/10 text-yellow-300 border-yellow-500/20"
-                              : "bg-red-500/10 text-red-300 border-red-500/20"
-                          }`}
-                        >
-                          {run.status}
-                        </span>
-                      </td>
-                      <td className="px-8 py-5 text-vicinity-peach font-bold">{run.errorCount || 0}</td>
-                      <td className="px-8 py-5 text-white/40 font-medium">
-                        {run.createdAt ? new Date(run.createdAt).toLocaleString() : "-"}
-                      </td>
-                      <td className="px-8 py-5 text-right">
-                        {run.canRetry && run.notes !== "embedding_rebuild" ? (
-                          <button
-                            onClick={() => handleRetryRun(run.id)}
-                            disabled={retryingRunId === run.id}
-                            className="px-4 py-2 rounded-xl bg-[#4a5a67] text-vicinity-peach hover:bg-[#526472] text-[10px] font-black uppercase tracking-widest disabled:opacity-60"
+                  {(systemData.recentRuns || []).map((run) => {
+                    const total = Number(run.videosScanned || 0);
+                    const processed = Math.min(Number(run.videosProcessed || 0), total || Number.MAX_SAFE_INTEGER);
+                    const progressText =
+                      total > 0 ? `${processed.toLocaleString()} / ${total.toLocaleString()}` : "-";
+
+                    return (
+                      <tr key={run.id} className="hover:bg-white/5 transition-colors">
+                        <td className="px-8 py-5 text-white font-bold">{run.sourceName}</td>
+                        <td className="px-8 py-5 text-white/50 font-black uppercase tracking-widest text-[10px]">
+                          {run.notes === "embedding_rebuild" ? "Embedding Rebuild" : "Vimeo Sync"}
+                        </td>
+                        <td className="px-8 py-5">
+                          <span
+                            className={`px-3 py-1 rounded-full text-[8px] font-black border uppercase tracking-widest ${
+                              run.status === "success"
+                                ? "bg-green-500/10 text-green-400 border-green-500/20"
+                                : run.status === "running"
+                                ? "bg-blue-500/10 text-blue-300 border-blue-500/20"
+                                : run.status === "partial"
+                                ? "bg-yellow-500/10 text-yellow-300 border-yellow-500/20"
+                                : "bg-red-500/10 text-red-300 border-red-500/20"
+                            }`}
                           >
-                            {retryingRunId === run.id ? "Retrying..." : "Retry"}
-                          </button>
-                        ) : (
-                          <span className="text-white/20 text-[10px] font-black uppercase tracking-widest">-</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+                            {run.status}
+                          </span>
+                        </td>
+                        <td className="px-8 py-5 text-white/80 font-bold">{progressText}</td>
+                        <td className="px-8 py-5 text-vicinity-peach font-bold">{run.errorCount || 0}</td>
+                        <td className="px-8 py-5 text-white/40 font-medium">
+                          {run.createdAt ? new Date(run.createdAt).toLocaleString() : "-"}
+                        </td>
+                        <td className="px-8 py-5 text-right">
+                          {run.canRetry && run.notes !== "embedding_rebuild" ? (
+                            <button
+                              onClick={() => handleRetryRun(run.id)}
+                              disabled={retryingRunId === run.id}
+                              className="px-4 py-2 rounded-xl bg-[#4a5a67] text-vicinity-peach hover:bg-[#526472] text-[10px] font-black uppercase tracking-widest disabled:opacity-60"
+                            >
+                              {retryingRunId === run.id ? "Retrying..." : "Retry"}
+                            </button>
+                          ) : (
+                            <span className="text-white/20 text-[10px] font-black uppercase tracking-widest">-</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                   {(systemData.recentRuns || []).length === 0 && (
                     <tr>
-                      <td colSpan={6} className="px-8 py-10 text-center text-white/40 font-bold">
+                      <td colSpan={7} className="px-8 py-10 text-center text-white/40 font-bold">
                         No operations yet.
                       </td>
                     </tr>
@@ -780,63 +878,81 @@ export default function AdminPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
-                {sources.map((source) => (
-                  <tr key={source.id} className="hover:bg-white/5 transition-colors group">
-                    <td className="px-10 py-6">
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-lg bg-[#4a5a67] flex items-center justify-center">
-                          <SafeIcon name="Video" className="text-vicinity-peach text-sm" />
+                {sources.map((source) => {
+                  const isSourceSyncing = source.status === "syncing" || syncingSourceIds.includes(source.id);
+                  return (
+                    <tr key={source.id} className="hover:bg-white/5 transition-colors group">
+                      <td className="px-10 py-6">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-lg bg-[#4a5a67] flex items-center justify-center">
+                            <SafeIcon name="Video" className="text-vicinity-peach text-sm" />
+                          </div>
+                          <span className="text-white font-bold">{source.name}</span>
                         </div>
-                        <span className="text-white font-bold">{source.name}</span>
-                      </div>
-                    </td>
-                    <td className="px-10 py-6 text-white/40 font-black uppercase text-[10px] tracking-widest">{source.platform}</td>
-                    <td className="px-10 py-6">
-                      <span className={`px-3 py-1 rounded-full text-[8px] font-black border uppercase tracking-widest ${
-                        source.status === "connected" ? "bg-green-500/10 text-green-400 border-green-500/20" :
-                        source.status === "syncing" ? "bg-blue-500/10 text-blue-300 border-blue-500/20" :
-                        source.status === "disabled" ? "bg-white/10 text-white/40 border-white/20" :
-                        "bg-red-500/10 text-red-300 border-red-500/20"
-                      }`}>{source.status}</span>
-                    </td>
-                    <td className="px-10 py-6 text-vicinity-peach font-bold">{Number(source.videoCount || 0).toLocaleString()}</td>
-                    <td className="px-10 py-6 text-right">
-                      <div className="flex justify-end gap-2">
-                        <button
-                          onClick={() => handleSourceTest(source.id)}
-                          disabled={sourceTestId === source.id}
-                          className="p-2 text-white/20 hover:text-emerald-300 transition-colors disabled:opacity-50"
-                          title="Test Token"
-                        >
-                          <SafeIcon name={sourceTestId === source.id ? "Loader2" : "ShieldCheck"} className={sourceTestId === source.id ? "animate-spin" : ""} />
-                        </button>
-                        <button onClick={() => handleSourceSync(source.id)} className="p-2 text-white/20 hover:text-vicinity-peach transition-colors" title="Sync Source"><SafeIcon name="RefreshCw" /></button>
-                        <button
-                          onClick={() => handleSourceRebuildEmbeddings(source.id)}
-                          disabled={sourceRebuildId === source.id}
-                          className="p-2 text-white/20 hover:text-vicinity-peach transition-colors disabled:opacity-50"
-                          title="Rebuild Embeddings"
-                        >
-                          <SafeIcon name={sourceRebuildId === source.id ? "Loader2" : "Cpu"} className={sourceRebuildId === source.id ? "animate-spin" : ""} />
-                        </button>
-                        <button onClick={() => startEditSource(source)} className="p-2 text-white/20 hover:text-blue-300 transition-colors" title="Edit Source"><SafeIcon name="Edit2" /></button>
-                        <button
-                          onClick={() =>
-                            setConfirmDialog({
-                              open: true,
-                              sourceId: source.id,
-                              sourceName: source.name
-                            })
-                          }
-                          className="p-2 text-white/20 hover:text-red-500 transition-colors"
-                          title="Disable Source"
-                        >
-                          <SafeIcon name="Trash2" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td className="px-10 py-6 text-white/40 font-black uppercase text-[10px] tracking-widest">{source.platform}</td>
+                      <td className="px-10 py-6">
+                        <span className={`px-3 py-1 rounded-full text-[8px] font-black border uppercase tracking-widest ${
+                          source.status === "connected" ? "bg-green-500/10 text-green-400 border-green-500/20" :
+                          source.status === "syncing" ? "bg-blue-500/10 text-blue-300 border-blue-500/20" :
+                          source.status === "disabled" ? "bg-white/10 text-white/40 border-white/20" :
+                          "bg-red-500/10 text-red-300 border-red-500/20"
+                        }`}>{source.status}</span>
+                      </td>
+                      <td className="px-10 py-6 text-vicinity-peach font-bold">{Number(source.videoCount || 0).toLocaleString()}</td>
+                      <td className="px-10 py-6 text-right">
+                        <div className="flex justify-end gap-2">
+                          <button
+                            onClick={() => handleSourceTest(source.id)}
+                            disabled={sourceTestId === source.id || isSourceSyncing}
+                            className="p-2 text-white/20 hover:text-emerald-300 transition-colors disabled:opacity-50"
+                            title="Test Token"
+                          >
+                            <SafeIcon name={sourceTestId === source.id ? "Loader2" : "ShieldCheck"} className={sourceTestId === source.id ? "animate-spin" : ""} />
+                          </button>
+                          <button
+                            onClick={() => handleSourceSync(source.id)}
+                            disabled={isSourceSyncing}
+                            className="p-2 text-white/20 hover:text-vicinity-peach transition-colors disabled:opacity-50"
+                            title="Sync Source"
+                          >
+                            <SafeIcon name="RefreshCw" />
+                          </button>
+                          <button
+                            onClick={() => handleSourceRebuildEmbeddings(source.id)}
+                            disabled={sourceRebuildId === source.id || isSourceSyncing}
+                            className="p-2 text-white/20 hover:text-vicinity-peach transition-colors disabled:opacity-50"
+                            title="Rebuild Embeddings"
+                          >
+                            <SafeIcon name={sourceRebuildId === source.id ? "Loader2" : "Cpu"} className={sourceRebuildId === source.id ? "animate-spin" : ""} />
+                          </button>
+                          <button
+                            onClick={() => startEditSource(source)}
+                            disabled={isSourceSyncing}
+                            className="p-2 text-white/20 hover:text-blue-300 transition-colors disabled:opacity-50"
+                            title="Edit Source"
+                          >
+                            <SafeIcon name="Edit2" />
+                          </button>
+                          <button
+                            onClick={() =>
+                              setConfirmDialog({
+                                open: true,
+                                sourceId: source.id,
+                                sourceName: source.name
+                              })
+                            }
+                            disabled={isSourceSyncing}
+                            className="p-2 text-white/20 hover:text-red-500 transition-colors disabled:opacity-50"
+                            title="Disable Source"
+                          >
+                            <SafeIcon name="Trash2" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -1132,6 +1248,21 @@ export default function AdminPage() {
           if (!genreConfirmDialog.genreId) return;
           deleteGenre(genreConfirmDialog.genreId);
         }}
+      />
+
+      <ConfirmDialog
+        open={truncateConfirmOpen}
+        title="Truncate Operational Data?"
+        description="This permanently clears all operational tables except _prisma_migrations, ai_configs, data_sources, and users."
+        confirmLabel="Yes, Truncate"
+        confirmingLabel="Truncating..."
+        cancelLabel="Cancel"
+        isConfirming={isTruncatingData}
+        onCancel={() => {
+          if (isTruncatingData) return;
+          setTruncateConfirmOpen(false);
+        }}
+        onConfirm={handleTruncateData}
       />
     </div>
   );

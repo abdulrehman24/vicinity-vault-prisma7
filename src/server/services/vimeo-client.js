@@ -81,7 +81,7 @@ export class VimeoClient {
     return response.json();
   }
 
-  async listVideos({ page = 1, perPage = 50, maxPages = 1 } = {}) {
+  async listVideos({ page = 1, perPage = 50, maxPages = 0 } = {}) {
     const videos = [];
     const fields = [
       "uri",
@@ -100,11 +100,14 @@ export class VimeoClient {
       "download.type"
     ].join(",");
 
+    const pageLimit = Number(maxPages);
+    const maxPageCount = Number.isFinite(pageLimit) && pageLimit > 0 ? pageLimit : Number.POSITIVE_INFINITY;
+
     let currentPage = page;
     let pagesFetched = 0;
     let hasMore = true;
 
-    while (hasMore && pagesFetched < maxPages) {
+    while (hasMore && pagesFetched < maxPageCount) {
       const payload = await this.request(`/me/videos?per_page=${perPage}&page=${currentPage}&fields=${encodeURIComponent(fields)}`);
       const data = Array.isArray(payload?.data) ? payload.data : [];
       this.logger.info?.("Fetched Vimeo videos page", {
@@ -140,7 +143,8 @@ export class VimeoClient {
 
     this.logger.info?.("Completed Vimeo videos fetch", {
       totalFetched: videos.length,
-      pagesFetched
+      pagesFetched,
+      maxPagesRequested: Number.isFinite(pageLimit) ? pageLimit : null
     });
     return videos;
   }

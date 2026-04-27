@@ -162,6 +162,36 @@ export class TranscriptService {
         : buildSegmentsFromPlainText(transcription.text);
 
       const text = (transcription.text || "").trim() || segments.map((segment) => segment.text).join(" ").trim();
+      if (!text || segments.length === 0) {
+        const failedChunks = transcription.failedChunks?.length || 0;
+        const totalChunks = Math.max(Number(transcription.failedChunks?.length || 0), 1);
+        const likelyNoSpeech = failedChunks === 0;
+        const errorMessage = likelyNoSpeech
+          ? "No speech detected in media (music-only or silent)."
+          : `OpenAI returned empty transcript (${failedChunks}/${totalChunks} chunks failed).`;
+        this.logger.info("OpenAI transcription produced empty output", {
+          videoId: videoRecord.id,
+          failedChunks,
+          totalChunks,
+          likelyNoSpeech
+        });
+        await this.persistTranscript({
+          videoId: videoRecord.id,
+          source: transcript_source.openai,
+          languageCode: "en",
+          status: likelyNoSpeech ? transcript_status.pending : transcript_status.failed,
+          text: null,
+          errorMessage
+        });
+        return {
+          transcriptId: null,
+          chunksCount: 0,
+          source: "openai",
+          skipped: true,
+          reason: likelyNoSpeech ? "no_speech_detected" : "openai_empty_transcript"
+        };
+      }
+
       const transcriptId = await this.persistTranscript({
         videoId: videoRecord.id,
         source: transcript_source.openai,

@@ -19,7 +19,8 @@ export async function POST(request) {
       syncRunId,
       initiatedByUserId: user.id,
       perPage: Number.isFinite(body?.perPage) ? Number(body.perPage) : 50,
-      maxPages: Number.isFinite(body?.maxPages) ? Number(body.maxPages) : 1
+      maxPages: Number.isFinite(body?.maxPages) ? Number(body.maxPages) : 0,
+      testVideoLimit: Number.isFinite(body?.testVideoLimit) ? Number(body.testVideoLimit) : null
     });
 
     return NextResponse.json(result);

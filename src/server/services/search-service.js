@@ -28,7 +28,27 @@ const NOISE_TERMS = new Set([
   "on",
   "in",
   "with",
-  "please"
+  "please",
+  "that",
+  "this",
+  "is",
+  "are",
+  "was",
+  "were",
+  "be",
+  "been",
+  "being",
+  "used",
+  "use",
+  "using",
+  "show",
+  "shows",
+  "showing",
+  "shown",
+  "display",
+  "displays",
+  "displaying",
+  "which"
 ]);
 
 const buildSearchIntentQuery = (raw) => {

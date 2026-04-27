@@ -20,7 +20,32 @@ export class AdminOperationsService {
     this.logger = logger;
   }
 
-  async retrySyncRun({ syncRunId, initiatedByUserId = null, perPage = 50, maxPages = 1 }) {
+  async truncateOperationalData() {
+    await this.prisma.$executeRawUnsafe(`
+      DO $$
+      DECLARE
+        tables_to_truncate text;
+      BEGIN
+        SELECT string_agg(format('%I.%I', schemaname, tablename), ', ' ORDER BY tablename)
+        INTO tables_to_truncate
+        FROM pg_tables
+        WHERE schemaname = 'public'
+          AND tablename NOT IN ('_prisma_migrations','ai_configs','data_sources','users');
+
+        IF tables_to_truncate IS NOT NULL THEN
+          EXECUTE 'TRUNCATE TABLE ' || tables_to_truncate || ' RESTART IDENTITY CASCADE';
+        END IF;
+      END $$;
+    `);
+
+    return {
+      status: "success",
+      message:
+        "Operational tables truncated. Preserved: _prisma_migrations, ai_configs, data_sources, users."
+    };
+  }
+
+  async retrySyncRun({ syncRunId, initiatedByUserId = null, perPage = 50, maxPages = 0, testVideoLimit = null }) {
     const existingRun = await this.prisma.sync_runs.findUnique({
       where: { id: syncRunId },
       select: {
@@ -58,6 +83,7 @@ export class AdminOperationsService {
       trigger: sync_run_trigger.retry,
       perPage,
       maxPages,
+      testVideoLimit,
       retryOfRunId: existingRun.id
     });
 
