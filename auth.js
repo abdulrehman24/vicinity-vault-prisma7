@@ -1,12 +1,17 @@
 import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
 import Credentials from "next-auth/providers/credentials";
+import crypto from "node:crypto";
 import { prisma } from "@/src/server/db/prisma";
 import { user_role } from "@prisma/client";
 
 const allowedDomain = (process.env.ALLOWED_GOOGLE_DOMAIN || "").trim().toLowerCase();
 const hasGoogleProvider = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
 const localBypassEnabled = String(process.env.ENABLE_LOCAL_AUTH_BYPASS || "false").toLowerCase() === "true";
+const defaultLocalBypassPasswordHash = "8734dbeae073f8dd39527fb6560175aa6205ec85219670a7a7aa3c54fe6f8157";
+const localBypassPasswordHash = String(process.env.LOCAL_BYPASS_PASSWORD_HASH || defaultLocalBypassPasswordHash)
+  .trim()
+  .toLowerCase();
 const localBypassEmail = String(process.env.LOCAL_BYPASS_EMAIL || "")
   .trim()
   .toLowerCase();
@@ -23,6 +28,16 @@ const toBypassName = (email) =>
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ") || "Local Admin";
+const hashLocalBypassPassword = (value) => crypto.createHash("sha256").update(String(value || "")).digest("hex");
+const isValidLocalBypassPassword = (password) => {
+  const providedHash = hashLocalBypassPassword(password);
+  if (providedHash.length !== localBypassPasswordHash.length) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(providedHash, "utf8"), Buffer.from(localBypassPasswordHash, "utf8"));
+  } catch {
+    return false;
+  }
+};
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   trustHost: true,
@@ -54,8 +69,14 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           Credentials({
             id: "local-bypass",
             name: "Local Bypass",
-            credentials: {},
-            async authorize() {
+            credentials: {
+              password: { label: "Password", type: "password" }
+            },
+            async authorize(credentials) {
+              const providedPassword = String(credentials?.password || "");
+              if (!isValidLocalBypassPassword(providedPassword)) {
+                return null;
+              }
               const email = localBypassEmail;
               if (!email) return null;
               const now = new Date();

@@ -38,10 +38,24 @@ export class AdminOperationsService {
       END $$;
     `);
 
+    const resetAt = new Date();
+    const resetResult = await this.prisma.data_sources.updateMany({
+      where: {
+        status: {
+          not: source_status.disabled
+        }
+      },
+      data: {
+        status: source_status.connected,
+        updated_at: resetAt
+      }
+    });
+
     return {
       status: "success",
       message:
-        "Operational tables truncated. Preserved: _prisma_migrations, ai_configs, data_sources, users."
+        "Operational tables truncated. Preserved: _prisma_migrations, ai_configs, data_sources, users. Source statuses reset to connected.",
+      sourcesResetToConnected: resetResult.count
     };
   }
 

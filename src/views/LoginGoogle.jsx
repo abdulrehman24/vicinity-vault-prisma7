@@ -10,6 +10,7 @@ export default function LoginGoogle() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [hasGoogleProvider, setHasGoogleProvider] = useState(true);
   const [hasLocalBypassProvider, setHasLocalBypassProvider] = useState(false);
+  const [localBypassPassword, setLocalBypassPassword] = useState("");
   const searchParams = useSearchParams();
   const { status, data: session } = useSession();
   const nextUrl = searchParams.get("next") || "/search";
@@ -60,7 +61,7 @@ export default function LoginGoogle() {
   const handleLocalBypass = async () => {
     if (!hasLocalBypassProvider || isSubmitting) return;
     setIsSubmitting(true);
-    await signIn("local-bypass", { callbackUrl: nextUrl });
+    await signIn("local-bypass", { callbackUrl: nextUrl, password: localBypassPassword });
   };
 
   return (
@@ -118,15 +119,24 @@ export default function LoginGoogle() {
             )}
 
             {hasLocalBypassProvider && (
-              <button
-                type="button"
-                onClick={handleLocalBypass}
-                disabled={isSubmitting}
-                className="w-full flex items-center justify-center gap-3 py-4 px-4 rounded-[1.25rem] border border-vicinity-peach/30 text-vicinity-peach hover:bg-vicinity-peach/10 transition-all uppercase tracking-widest text-[10px] font-black disabled:opacity-60"
-              >
-                Local Dev Bypass
-                <SafeIcon name="LogIn" />
-              </button>
+              <div className="space-y-3">
+                <input
+                  type="password"
+                  value={localBypassPassword}
+                  onChange={(e) => setLocalBypassPassword(e.target.value)}
+                  placeholder="Local bypass password"
+                  className="w-full py-3 px-4 rounded-xl bg-[#4a5a67] border border-white/10 text-vicinity-peach placeholder-vicinity-peach/40 outline-none focus:border-vicinity-peach/40"
+                />
+                <button
+                  type="button"
+                  onClick={handleLocalBypass}
+                  disabled={isSubmitting || !localBypassPassword}
+                  className="w-full flex items-center justify-center gap-3 py-4 px-4 rounded-[1.25rem] border border-vicinity-peach/30 text-vicinity-peach hover:bg-vicinity-peach/10 transition-all uppercase tracking-widest text-[10px] font-black disabled:opacity-60"
+                >
+                  Local Dev Bypass
+                  <SafeIcon name="LogIn" />
+                </button>
+              </div>
             )}
           </div>
 
