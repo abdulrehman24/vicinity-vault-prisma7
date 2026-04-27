@@ -17,7 +17,12 @@ export async function middleware(request) {
   const { pathname, search } = request.nextUrl;
   let token = null;
   try {
-    token = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET });
+    token = await getToken({
+      req: request,
+      secret: process.env.NEXTAUTH_SECRET,
+      cookieName: "__Secure-authjs.session-token",
+      secureCookie: true
+    });
   } catch (_error) {
     token = null;
   }
