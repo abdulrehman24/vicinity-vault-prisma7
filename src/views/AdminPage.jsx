@@ -851,6 +851,17 @@ export default function AdminPage() {
                       <td className="px-8 py-5 text-right">
                         <div className="flex justify-end gap-2">
                           <button
+                            onClick={() => handleRetryRun(row.syncRunId)}
+                            disabled={
+                              !row.syncRunId ||
+                              row.status === "retrying" ||
+                              retryingRunId === row.syncRunId
+                            }
+                            className="px-3 py-2 rounded-xl bg-blue-500/20 text-blue-200 text-[10px] font-black uppercase tracking-widest disabled:opacity-40"
+                          >
+                            {retryingRunId === row.syncRunId ? "Retrying..." : "Retry"}
+                          </button>
+                          <button
                             onClick={() => handleSyncErrorStatus(row.id, "resolved")}
                             disabled={errorActionId === row.id || row.status === "resolved"}
                             className="px-3 py-2 rounded-xl bg-emerald-500/20 text-emerald-200 text-[10px] font-black uppercase tracking-widest disabled:opacity-40"
