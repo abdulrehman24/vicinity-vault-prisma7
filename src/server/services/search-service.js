@@ -80,6 +80,70 @@ const toScoreMap = (rows, idField, scoreField) => {
 const normalizeMetadataScore = (raw) => clamp(raw / 0.9);
 const normalizeTranscriptScore = (raw) => clamp(raw / 0.75);
 const normalizeSemanticScore = (raw) => clamp(raw);
+const DURATION_CONSTRAINT_REGEX = {
+  under: /\b(?:under|less than|below|shorter than|max(?:imum)?(?: of)?)\s+(\d{1,3})\s*(?:min|mins|minute|minutes)\b/i,
+  over: /\b(?:over|more than|above|longer than|min(?:imum)?(?: of)?)\s+(\d{1,3})\s*(?:min|mins|minute|minutes)\b/i
+};
+
+const parseDurationConstraint = (query) => {
+  const underMatch = String(query || "").match(DURATION_CONSTRAINT_REGEX.under);
+  if (underMatch) {
+    const minutes = Number(underMatch[1]);
+    if (Number.isFinite(minutes) && minutes > 0) {
+      return { type: "max", seconds: minutes * 60 };
+    }
+  }
+  const overMatch = String(query || "").match(DURATION_CONSTRAINT_REGEX.over);
+  if (overMatch) {
+    const minutes = Number(overMatch[1]);
+    if (Number.isFinite(minutes) && minutes > 0) {
+      return { type: "min", seconds: minutes * 60 };
+    }
+  }
+  return null;
+};
+
+const buildRequirementTerms = (query) => {
+  const clean = String(query || "")
+    .toLowerCase()
+    .replace(/[^\w\s]/g, " ")
+    .split(/\s+/)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 2 && !NOISE_TERMS.has(part));
+  return Array.from(new Set(clean));
+};
+
+const buildVideoTextCorpus = (video) => {
+  const title = video.title || "";
+  const description = video.description || "";
+  const folderName = video.folder_name || "";
+  const tags = (video.video_tags || []).map((tag) => tag.tag).join(" ");
+  const categories = (video.video_categories || [])
+    .map((item) => item.category?.name || item.category?.slug || "")
+    .join(" ");
+
+  return normalizeLower([title, description, folderName, tags, categories].join(" "));
+};
+
+const computeRequirementCoverage = (video, terms) => {
+  if (!terms.length) return 0;
+  const corpus = buildVideoTextCorpus(video);
+  let matched = 0;
+  for (const term of terms) {
+    if (corpus.includes(term)) matched += 1;
+  }
+  return clamp(matched / terms.length);
+};
+
+const scoreDurationMatch = (video, constraint) => {
+  if (!constraint) return 0;
+  const duration = Number(video.duration_seconds || 0);
+  if (!Number.isFinite(duration) || duration <= 0) return -0.08;
+  if (constraint.type === "max") {
+    return duration <= constraint.seconds ? 0.1 : -0.18;
+  }
+  return duration >= constraint.seconds ? 0.1 : -0.18;
+};
 
 const buildHeuristicReason = ({ metadataScore, transcriptScore, semanticScore, video }) => {
   if (semanticScore >= 0.68) {
@@ -123,6 +187,8 @@ export class SearchService {
     if (!q) return [];
     const qIntent = buildSearchIntentQuery(q);
     const qLower = normalizeLower(qIntent);
+    const requirementTerms = buildRequirementTerms(q);
+    const durationConstraint = parseDurationConstraint(q);
 
     const metadataRows = await this.prisma.$queryRawUnsafe(
       `
@@ -270,20 +336,31 @@ export class SearchService {
         const metadataScore = normalizeMetadataScore(metadataScoreMap.get(video.id) || (metadataIds.has(video.id) ? 0.25 : 0));
         const transcriptScore = normalizeTranscriptScore(transcriptScoreMap.get(video.id) || (transcriptIds.has(video.id) ? 0.25 : 0));
         const semanticScore = normalizeSemanticScore(semanticVideoScores.get(video.id) || 0);
+        const requirementCoverageScore = computeRequirementCoverage(video, requirementTerms);
+        const durationScore = scoreDurationMatch(video, durationConstraint);
         const merged =
           metadataScore * metadataWeight +
           transcriptScore * transcriptWeight +
-          semanticScore * semanticWeight;
+          semanticScore * semanticWeight +
+          requirementCoverageScore * 0.18 +
+          durationScore;
 
         return {
           video,
           metadataScore,
           transcriptScore,
           semanticScore,
+          requirementCoverageScore,
           mergedScore: clamp(merged, 0, 0.99)
         };
       })
-      .filter((entry) => entry.mergedScore >= minScoreThreshold)
+      .filter((entry) => {
+        if (entry.mergedScore < minScoreThreshold) return false;
+        if (requirementTerms.length >= 4) {
+          return entry.requirementCoverageScore >= 0.25 || entry.semanticScore >= 0.72;
+        }
+        return true;
+      })
       .sort((a, b) => b.mergedScore - a.mergedScore)
       .slice(0, limit);
 

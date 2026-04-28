@@ -296,6 +296,7 @@ export class VideoSyncService {
         Number.isFinite(requestedMaxPages) && requestedMaxPages > 0
           ? Math.floor(requestedMaxPages)
           : Number.POSITIVE_INFINITY;
+      const normalizedPerPage = Math.max(1, Math.floor(Number(perPage) || 50));
       const configuredTestLimit = Number(process.env.SYNC_TEST_VIDEO_LIMIT || "");
       const requestedTestLimit = Number(testVideoLimit);
       const effectiveTestLimit =
@@ -517,9 +518,14 @@ export class VideoSyncService {
         let videosToProcess = fetchedVideos;
 
         if (progressTotalVideos === null && Number.isFinite(pageResult.totalCount)) {
-          progressTotalVideos = effectiveTestLimit
-            ? Math.min(pageResult.totalCount, effectiveTestLimit)
-            : pageResult.totalCount;
+          const progressCaps = [pageResult.totalCount];
+          if (effectiveTestLimit) {
+            progressCaps.push(effectiveTestLimit);
+          }
+          if (Number.isFinite(maxPageCount)) {
+            progressCaps.push(maxPageCount * normalizedPerPage);
+          }
+          progressTotalVideos = Math.min(...progressCaps);
           runLogger.info("Detected Vimeo total video count for progress", {
             totalFromApi: pageResult.totalCount,
             progressTotalVideos
