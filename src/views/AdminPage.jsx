@@ -39,6 +39,15 @@ export default function AdminPage() {
     recentRuns: []
   });
   const [syncErrors, setSyncErrors] = useState([]);
+  const [syncLogs, setSyncLogs] = useState({
+    enabled: true,
+    lines: [],
+    lineCount: 0,
+    filePath: null,
+    message: "",
+    truncated: false
+  });
+  const [isLoadingLogs, setIsLoadingLogs] = useState(false);
   const [syncErrorFilter, setSyncErrorFilter] = useState("open");
   const [errorActionId, setErrorActionId] = useState(null);
   const [sources, setSources] = useState([]);
@@ -110,6 +119,23 @@ export default function AdminPage() {
     setSyncErrors(payload.errors || []);
   };
 
+  const loadSyncLogs = async ({ silent = false } = {}) => {
+    if (!silent) setIsLoadingLogs(true);
+    try {
+      const payload = await apiFetch("/api/admin/system/logs?lines=180&maxBytes=262144");
+      setSyncLogs({
+        enabled: typeof payload.enabled === "boolean" ? payload.enabled : true,
+        lines: payload.lines || [],
+        lineCount: Number(payload.lineCount || 0),
+        filePath: payload.filePath || null,
+        message: payload.message || "",
+        truncated: Boolean(payload.truncated)
+      });
+    } finally {
+      if (!silent) setIsLoadingLogs(false);
+    }
+  };
+
   const loadSources = async () => {
     const payload = await apiFetch("/api/admin/sources");
     setSources(payload.sources || []);
@@ -150,7 +176,7 @@ export default function AdminPage() {
       try {
         setPageError("");
         if (activeTab === "system") {
-          await Promise.all([loadSystem(), loadSyncErrors(syncErrorFilter)]);
+          await Promise.all([loadSystem(), loadSyncErrors(syncErrorFilter), loadSyncLogs()]);
         }
         if (activeTab === "sources") await loadSources();
         if (activeTab === "users") await loadUsers();
@@ -170,6 +196,7 @@ export default function AdminPage() {
 
     const intervalId = window.setInterval(() => {
       loadSystem().catch(() => {});
+      loadSyncLogs({ silent: true }).catch(() => {});
     }, 5000);
 
     return () => {
@@ -851,6 +878,48 @@ export default function AdminPage() {
                 </tbody>
               </table>
             </div>
+          </div>
+
+          <div className="bg-[#3d4a55] rounded-[3rem] border border-white/10 shadow-2xl overflow-hidden">
+            <div className="px-10 py-6 border-b border-white/5 bg-[#43525e] flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+              <div className="text-left">
+                <h3 className="text-lg font-bold text-white tracking-tight">Sync Logs</h3>
+                <p className="text-[10px] text-vicinity-peach/40 uppercase tracking-widest font-black mt-1">
+                  Tail view of sync process logs.
+                </p>
+              </div>
+              <button
+                onClick={() => loadSyncLogs()}
+                disabled={isLoadingLogs}
+                className="px-4 py-2 rounded-xl bg-[#4a5a67] text-vicinity-peach hover:bg-[#526472] text-[10px] font-black uppercase tracking-widest disabled:opacity-60 flex items-center gap-2"
+              >
+                <SafeIcon name="RefreshCw" className={isLoadingLogs ? "animate-spin" : ""} />
+                {isLoadingLogs ? "Refreshing..." : "Refresh Logs"}
+              </button>
+            </div>
+            <div className="px-10 py-4 text-left border-b border-white/5 bg-black/20">
+              <p className="text-[10px] text-vicinity-peach/40 uppercase tracking-widest font-black">
+                {syncLogs.filePath ? `File: ${syncLogs.filePath}` : "File: not available"}
+              </p>
+              {syncLogs.truncated && (
+                <p className="text-[10px] text-white/40 font-black uppercase tracking-widest mt-2">
+                  Showing latest tail only.
+                </p>
+              )}
+            </div>
+            {!syncLogs.enabled ? (
+              <div className="px-10 py-10 text-left text-white/60">{syncLogs.message || "Sync file logging is disabled."}</div>
+            ) : syncLogs.lines.length === 0 ? (
+              <div className="px-10 py-10 text-left text-white/60">
+                {syncLogs.message || "No log lines yet."}
+              </div>
+            ) : (
+              <div className="max-h-[26rem] overflow-y-auto bg-[#1f2730]">
+                <pre className="text-[11px] leading-5 text-emerald-200 p-8 whitespace-pre-wrap break-words font-mono">
+                  {syncLogs.lines.join("\n")}
+                </pre>
+              </div>
+            )}
           </div>
         </div>
       )}
