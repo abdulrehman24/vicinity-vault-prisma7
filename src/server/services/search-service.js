@@ -281,6 +281,39 @@ const buildRequirementTerms = (query) => {
   return Array.from(new Set(clean));
 };
 
+const REQUIREMENT_SYNONYMS = {
+  format: [
+    "highlight",
+    "highlights",
+    "event",
+    "interview",
+    "interviews",
+    "testimonial",
+    "testimonials",
+    "case study",
+    "documentary",
+    "promo",
+    "commercial"
+  ],
+  audience: ["corporate", "enterprise", "b2b", "executive", "boardroom"],
+  style: ["premium", "luxury", "cinematic", "polished", "elegant", "high-end"],
+  industry: ["healthcare", "medical", "hospital", "pharma", "biotech", "clinical"]
+};
+
+const extractStructuredRequirements = (query) => {
+  const lower = normalizeLower(query);
+  const matched = [];
+
+  for (const [group, terms] of Object.entries(REQUIREMENT_SYNONYMS)) {
+    const hits = terms.filter((term) => lower.includes(term));
+    if (hits.length) {
+      matched.push({ group, terms: Array.from(new Set(hits)) });
+    }
+  }
+
+  return matched;
+};
+
 const buildVideoTextCorpus = (video) => {
   const title = video.title || "";
   const description = video.description || "";
@@ -293,14 +326,29 @@ const buildVideoTextCorpus = (video) => {
   return normalizeLower([title, description, folderName, tags, categories].join(" "));
 };
 
-const computeRequirementCoverage = (video, terms) => {
-  if (!terms.length) return 0;
+const computeRequirementCoverage = (video, terms, structuredRequirements = []) => {
   const corpus = buildVideoTextCorpus(video);
-  let matched = 0;
-  for (const term of terms) {
-    if (corpus.includes(term)) matched += 1;
+  let keywordCoverage = 0;
+
+  if (terms.length) {
+    let matched = 0;
+    for (const term of terms) {
+      if (corpus.includes(term)) matched += 1;
+    }
+    keywordCoverage = clamp(matched / terms.length);
   }
-  return clamp(matched / terms.length);
+
+  if (!structuredRequirements.length) return keywordCoverage;
+
+  let structuredMatched = 0;
+  for (const requirement of structuredRequirements) {
+    if (requirement.terms.some((term) => corpus.includes(term))) {
+      structuredMatched += 1;
+    }
+  }
+  const structuredCoverage = clamp(structuredMatched / structuredRequirements.length);
+
+  return clamp(keywordCoverage * 0.55 + structuredCoverage * 0.45);
 };
 
 const scoreDurationMatch = (video, constraint) => {
@@ -356,6 +404,7 @@ export class SearchService {
     const qIntent = buildSearchIntentQuery(q);
     const qLower = normalizeLower(qIntent);
     const requirementTerms = buildRequirementTerms(q);
+    const structuredRequirements = extractStructuredRequirements(q);
     const durationConstraint = parseDurationConstraint(q);
 
     const metadataRows = await this.prisma.$queryRawUnsafe(
@@ -504,7 +553,11 @@ export class SearchService {
         const metadataScore = normalizeMetadataScore(metadataScoreMap.get(video.id) || (metadataIds.has(video.id) ? 0.25 : 0));
         const transcriptScore = normalizeTranscriptScore(transcriptScoreMap.get(video.id) || (transcriptIds.has(video.id) ? 0.25 : 0));
         const semanticScore = normalizeSemanticScore(semanticVideoScores.get(video.id) || 0);
-        const requirementCoverageScore = computeRequirementCoverage(video, requirementTerms);
+        const requirementCoverageScore = computeRequirementCoverage(
+          video,
+          requirementTerms,
+          structuredRequirements
+        );
         const durationScore = scoreDurationMatch(video, durationConstraint);
         const merged =
           metadataScore * metadataWeight +
@@ -524,6 +577,9 @@ export class SearchService {
       })
       .filter((entry) => {
         if (entry.mergedScore < minScoreThreshold) return false;
+        if (structuredRequirements.length >= 2) {
+          return entry.requirementCoverageScore >= 0.35 || entry.semanticScore >= 0.76;
+        }
         if (requirementTerms.length >= 4) {
           return entry.requirementCoverageScore >= 0.25 || entry.semanticScore >= 0.72;
         }
