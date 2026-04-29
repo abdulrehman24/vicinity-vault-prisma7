@@ -20,6 +20,9 @@ export async function POST(request, { params }) {
       maxPages: Number.isFinite(body?.maxPages) ? Number(body.maxPages) : 0,
       testVideoLimit: Number.isFinite(body?.testVideoLimit) ? Number(body.testVideoLimit) : null
     });
+    if (result.status === "accepted") {
+      service.processNextJob().catch(() => {});
+    }
 
     return NextResponse.json(result, { status: result.status === "accepted" ? 202 : 200 });
   } catch (error) {
