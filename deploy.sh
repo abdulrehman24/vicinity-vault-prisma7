@@ -4,6 +4,7 @@ set -euo pipefail
 
 APP_DIR="/var/www/vault"
 APP_NAME="vault"
+SYNC_WORKER_NAME="vimeo-vault-sync-worker"
 BRANCH="${1:-main}"
 RUN_NGINX_RELOAD="${RUN_NGINX_RELOAD:-true}"
 
@@ -36,6 +37,13 @@ if pm2 describe "$APP_NAME" >/dev/null 2>&1; then
   pm2 restart "$APP_NAME"
 else
   pm2 start npm --name "$APP_NAME" -- start
+fi
+
+echo "[deploy] Restarting sync worker..."
+if pm2 describe "$SYNC_WORKER_NAME" >/dev/null 2>&1; then
+  pm2 restart "$SYNC_WORKER_NAME"
+else
+  pm2 start npm --name "$SYNC_WORKER_NAME" -- run worker:sync
 fi
 
 echo "[deploy] Saving PM2 process list..."
