@@ -9,6 +9,9 @@ LEGACY_SYNC_WORKER_NAME="vimeo-va"
 BRANCH="${1:-main}"
 RUN_NGINX_RELOAD="${RUN_NGINX_RELOAD:-true}"
 SYNC_BASE_URL="${SYNC_BASE_URL:-http://127.0.0.1:3000}"
+APP_HEALTH_URL="${APP_HEALTH_URL:-$SYNC_BASE_URL/login}"
+APP_HEALTH_RETRIES="${APP_HEALTH_RETRIES:-30}"
+APP_HEALTH_SLEEP_SECONDS="${APP_HEALTH_SLEEP_SECONDS:-2}"
 
 echo "[deploy] Starting deployment..."
 
@@ -40,6 +43,12 @@ npx prisma migrate deploy
 echo "[deploy] Building Next.js app..."
 npm run build
 
+echo "[deploy] Removing legacy sync worker process names (if any)..."
+pm2 delete "$LEGACY_SYNC_WORKER_NAME" >/dev/null 2>&1 || true
+
+echo "[deploy] Stopping sync worker before app restart (queue-safe deploy)..."
+pm2 stop "$SYNC_WORKER_NAME" >/dev/null 2>&1 || true
+
 echo "[deploy] Restarting PM2 app..."
 if pm2 describe "$APP_NAME" >/dev/null 2>&1; then
   pm2 restart "$APP_NAME" --update-env
@@ -47,8 +56,18 @@ else
   pm2 start npm --name "$APP_NAME" -- start
 fi
 
-echo "[deploy] Removing legacy sync worker process names (if any)..."
-pm2 delete "$LEGACY_SYNC_WORKER_NAME" >/dev/null 2>&1 || true
+echo "[deploy] Waiting for app health at $APP_HEALTH_URL ..."
+for ((i=1; i<=APP_HEALTH_RETRIES; i++)); do
+  if curl -fsS "$APP_HEALTH_URL" >/dev/null 2>&1; then
+    echo "[deploy] App health check passed."
+    break
+  fi
+  if [[ "$i" -eq "$APP_HEALTH_RETRIES" ]]; then
+    echo "[deploy] ERROR: App health check failed after $APP_HEALTH_RETRIES attempts."
+    exit 1
+  fi
+  sleep "$APP_HEALTH_SLEEP_SECONDS"
+done
 
 echo "[deploy] Restarting sync worker..."
 if pm2 describe "$SYNC_WORKER_NAME" >/dev/null 2>&1; then
