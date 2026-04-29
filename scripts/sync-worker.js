@@ -12,6 +12,7 @@ const main = async () => {
   const baseUrl = parseArg("baseUrl", process.env.SYNC_BASE_URL || "http://localhost:3000");
   const pollMs = Number(parseArg("pollMs", process.env.SYNC_WORKER_POLL_MS || "5000"));
   const workerId = parseArg("workerId", process.env.SYNC_WORKER_ID || `sync-worker-${process.pid}`);
+  const internalSyncToken = parseArg("internalSyncToken", process.env.INTERNAL_SYNC_TOKEN || "");
 
   console.log(`Sync worker started: ${workerId}`);
   console.log(`Polling ${baseUrl}/api/internal/sync/jobs/process-next`);
@@ -20,7 +21,10 @@ const main = async () => {
     try {
       const response = await fetch(`${baseUrl}/api/internal/sync/jobs/process-next`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(internalSyncToken ? { "x-internal-sync-token": internalSyncToken } : {})
+        },
         body: JSON.stringify({ workerId })
       });
 

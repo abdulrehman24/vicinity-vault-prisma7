@@ -7,6 +7,7 @@ APP_NAME="vault"
 SYNC_WORKER_NAME="vimeo-vault-sync-worker"
 BRANCH="${1:-main}"
 RUN_NGINX_RELOAD="${RUN_NGINX_RELOAD:-true}"
+SYNC_BASE_URL="${SYNC_BASE_URL:-http://127.0.0.1:3000}"
 
 echo "[deploy] Starting deployment..."
 
@@ -22,6 +23,12 @@ npm ci
 
 echo "[deploy] Checking environment..."
 npm run check:env:strict
+
+if [[ -z "${INTERNAL_SYNC_TOKEN:-}" ]]; then
+  echo "[deploy] ERROR: INTERNAL_SYNC_TOKEN is required for sync worker authentication."
+  echo "[deploy] Set INTERNAL_SYNC_TOKEN in your shell, PM2 ecosystem, or service env before deploy."
+  exit 1
+fi
 
 echo "[deploy] Generating Prisma client..."
 npx prisma generate
@@ -41,9 +48,9 @@ fi
 
 echo "[deploy] Restarting sync worker..."
 if pm2 describe "$SYNC_WORKER_NAME" >/dev/null 2>&1; then
-  pm2 restart "$SYNC_WORKER_NAME"
+  INTERNAL_SYNC_TOKEN="$INTERNAL_SYNC_TOKEN" SYNC_BASE_URL="$SYNC_BASE_URL" pm2 restart "$SYNC_WORKER_NAME" --update-env
 else
-  pm2 start npm --name "$SYNC_WORKER_NAME" -- run worker:sync
+  INTERNAL_SYNC_TOKEN="$INTERNAL_SYNC_TOKEN" SYNC_BASE_URL="$SYNC_BASE_URL" pm2 start npm --name "$SYNC_WORKER_NAME" -- run worker:sync
 fi
 
 echo "[deploy] Saving PM2 process list..."

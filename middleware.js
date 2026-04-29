@@ -5,6 +5,7 @@ const PROTECTED_PAGES = ["/search", "/featured", "/playlists", "/personal", "/ad
 const PROTECTED_API_PREFIXES = ["/api/search", "/api/featured", "/api/playlists", "/api/personal", "/api/nav"];
 const ADMIN_API_PREFIX = "/api/admin";
 const INTERNAL_ADMIN_API_PREFIX = "/api/internal/sync";
+const INTERNAL_SYNC_TOKEN_HEADER = "x-internal-sync-token";
 
 const isProtectedPage = (pathname) =>
   PROTECTED_PAGES.some((page) => pathname === page || pathname.startsWith(`${page}/`));
@@ -29,6 +30,10 @@ export async function middleware(request) {
   }
   const isLoggedIn = Boolean(token?.uid || token?.sub);
   const isAdmin = token?.role === "admin";
+  const internalSyncToken = process.env.INTERNAL_SYNC_TOKEN || "";
+  const requestInternalToken = request.headers.get(INTERNAL_SYNC_TOKEN_HEADER) || "";
+  const hasValidInternalToken =
+    Boolean(internalSyncToken) && requestInternalToken.length > 0 && requestInternalToken === internalSyncToken;
 
   if (pathname === "/login" && isLoggedIn) {
     return NextResponse.redirect(new URL("/search", request.url));
@@ -57,7 +62,7 @@ export async function middleware(request) {
     return NextResponse.json({ error: "Admin access required." }, { status: isLoggedIn ? 403 : 401 });
   }
 
-  if (pathname.startsWith(INTERNAL_ADMIN_API_PREFIX) && (!isLoggedIn || !isAdmin)) {
+  if (pathname.startsWith(INTERNAL_ADMIN_API_PREFIX) && !hasValidInternalToken && (!isLoggedIn || !isAdmin)) {
     return NextResponse.json({ error: "Admin access required." }, { status: isLoggedIn ? 403 : 401 });
   }
 
