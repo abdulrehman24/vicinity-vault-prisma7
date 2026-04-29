@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/src/server/db/prisma";
 import { assertAdminRequest } from "@/src/server/auth/admin";
-import { AdminOperationsService } from "@/src/server/services/admin-operations-service";
+import { SyncJobService } from "@/src/server/services/sync-job-service";
 
 export const runtime = "nodejs";
 
@@ -14,8 +14,8 @@ export async function POST(request) {
       return NextResponse.json({ error: "syncRunId is required." }, { status: 400 });
     }
 
-    const service = new AdminOperationsService({ prisma });
-    const result = await service.retrySyncRun({
+    const service = new SyncJobService({ prisma });
+    const result = await service.enqueueRetryRun({
       syncRunId,
       initiatedByUserId: user.id,
       perPage: Number.isFinite(body?.perPage) ? Number(body.perPage) : 50,
@@ -23,7 +23,7 @@ export async function POST(request) {
       testVideoLimit: Number.isFinite(body?.testVideoLimit) ? Number(body.testVideoLimit) : null
     });
 
-    return NextResponse.json(result);
+    return NextResponse.json(result, { status: result.status === "accepted" ? 202 : 200 });
   } catch (error) {
     return NextResponse.json({ error: error.message }, { status: error.statusCode || 400 });
   }

@@ -77,6 +77,7 @@ enum sync_error_stage {
   chunk_transcript
   embed
   upsert
+  categorize
 }
 
 enum sync_error_status {
@@ -84,6 +85,29 @@ enum sync_error_status {
   retrying
   resolved
   ignored
+}
+
+enum sync_job_type {
+  vimeo_sync
+  retry_failed_videos
+  embedding_rebuild
+}
+
+enum sync_job_status {
+  queued
+  running
+  success
+  partial
+  failed
+  cancelled
+}
+
+enum sync_run_video_status {
+  queued
+  running
+  success
+  failed
+  skipped
 }
 
 model users {
@@ -127,6 +151,8 @@ model data_sources {
   videos                        videos[]
   sync_runs                     sync_runs[]
   sync_errors                   sync_errors[]
+  sync_jobs                     sync_jobs[]
+  sync_run_videos               sync_run_videos[]
 
   @@index([status])
 }
@@ -160,6 +186,7 @@ model videos {
   favourites        favourites[]
   shortlist_items   shortlist_items[]
   sync_errors       sync_errors[]
+  sync_run_videos   sync_run_videos[]
 
   @@index([data_source_id])
   @@index([status])
@@ -336,9 +363,62 @@ model sync_runs {
   retry_of_run          sync_runs?       @relation("retry_run", fields: [retry_of_run_id], references: [id], onDelete: SetNull)
   retries               sync_runs[]      @relation("retry_run")
   sync_errors           sync_errors[]
+  sync_jobs             sync_jobs[]
+  sync_run_videos       sync_run_videos[]
 
   @@index([data_source_id, created_at])
   @@index([status])
+}
+
+model sync_jobs {
+  id             String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sync_run_id    String?         @db.Uuid
+  data_source_id String?         @db.Uuid
+  job_type       sync_job_type   @default(vimeo_sync)
+  status         sync_job_status @default(queued)
+  payload        Json            @default("{}")
+  attempts       Int             @default(0)
+  max_attempts   Int             @default(3)
+  locked_at      DateTime?       @db.Timestamptz(6)
+  locked_by      String?
+  started_at     DateTime?       @db.Timestamptz(6)
+  finished_at    DateTime?       @db.Timestamptz(6)
+  error_message  String?
+  created_at     DateTime        @default(now()) @db.Timestamptz(6)
+  updated_at     DateTime        @default(now()) @db.Timestamptz(6)
+  sync_run       sync_runs?      @relation(fields: [sync_run_id], references: [id], onDelete: Cascade)
+  data_source    data_sources?   @relation(fields: [data_source_id], references: [id], onDelete: SetNull)
+
+  @@index([status, created_at])
+  @@index([locked_at])
+  @@index([sync_run_id])
+  @@index([data_source_id])
+}
+
+model sync_run_videos {
+  id             String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sync_run_id    String                @db.Uuid
+  data_source_id String                @db.Uuid
+  video_id       String?               @db.Uuid
+  vimeo_video_id String
+  status         sync_run_video_status @default(queued)
+  stage          sync_error_stage?
+  attempts       Int                   @default(0)
+  error_message  String?
+  payload        Json                  @default("{}")
+  started_at     DateTime?             @db.Timestamptz(6)
+  finished_at    DateTime?             @db.Timestamptz(6)
+  created_at     DateTime              @default(now()) @db.Timestamptz(6)
+  updated_at     DateTime              @default(now()) @db.Timestamptz(6)
+  sync_run       sync_runs             @relation(fields: [sync_run_id], references: [id], onDelete: Cascade)
+  data_source    data_sources          @relation(fields: [data_source_id], references: [id], onDelete: Restrict)
+  video          videos?               @relation(fields: [video_id], references: [id], onDelete: SetNull)
+
+  @@unique([sync_run_id, vimeo_video_id])
+  @@index([sync_run_id, status])
+  @@index([data_source_id])
+  @@index([video_id])
+  @@index([vimeo_video_id])
 }
 
 model sync_errors {

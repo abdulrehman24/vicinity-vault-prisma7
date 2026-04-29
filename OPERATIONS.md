@@ -36,6 +36,33 @@ Optional flags:
 - `--perPage=50`
 - `--maxPages=1`
 
+## Durable Sync Worker
+
+Admin sync buttons now enqueue database-backed sync jobs. Run the worker alongside the web app to process queued jobs:
+
+```bash
+npm run worker:sync
+```
+
+Optional flags:
+
+- `--baseUrl=http://localhost:3000`
+- `--pollMs=5000`
+- `--workerId=sync-worker-1`
+
+Recommended transcription timeout defaults:
+
+- `TRANSCRIPTION_DOWNLOAD_TIMEOUT_MS=120000`
+- `TRANSCRIPTION_COMMAND_TIMEOUT_MS=180000`
+- `OPENAI_TRANSCRIPTION_TIMEOUT_MS=180000`
+
+PM2 example:
+
+```bash
+pm2 start npm --name vimeo-vault -- start
+pm2 start npm --name vimeo-vault-sync-worker -- run worker:sync
+```
+
 ## Admin Ops
 
 In `/admin` → `System`:

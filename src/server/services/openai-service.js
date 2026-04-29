@@ -7,6 +7,9 @@ import { env } from "../config/env";
 const OPENAI_AUDIO_UPLOAD_LIMIT_BYTES = 24 * 1024 * 1024;
 const DEFAULT_SEGMENT_SECONDS = 9 * 60;
 const DEFAULT_TRANSCRIPTION_MODEL = "whisper-1";
+const DEFAULT_DOWNLOAD_TIMEOUT_MS = 120000;
+const DEFAULT_COMMAND_TIMEOUT_MS = 180000;
+const DEFAULT_OPENAI_TRANSCRIPTION_TIMEOUT_MS = 180000;
 const SUPPORTED_TRANSCRIPTION_MODELS = new Set([
   "whisper-1",
   "gpt-4o-mini-transcribe",
@@ -54,11 +57,48 @@ const extractOpenAiErrorMeta = (error) => {
   };
 };
 
-const runCommand = (command, args) =>
+const createTimeoutSignal = (timeoutMs, label) => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort(new Error(`${label} timed out after ${timeoutMs}ms`));
+  }, timeoutMs);
+  return { signal: controller.signal, timeoutId };
+};
+
+const fetchArrayBufferWithTimeout = async ({ url, timeoutMs = DEFAULT_DOWNLOAD_TIMEOUT_MS }) => {
+  const { signal, timeoutId } = createTimeoutSignal(timeoutMs, "Media download");
+  try {
+    const response = await fetch(url, { signal });
+    if (!response.ok) {
+      throw new Error(`Could not download media for transcription: ${response.status} ${response.statusText}`);
+    }
+    return Buffer.from(await response.arrayBuffer());
+  } catch (error) {
+    if (signal.aborted) {
+      throw new Error(`Media download timed out after ${timeoutMs}ms.`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+};
+
+const runCommand = (command, args, { timeoutMs = DEFAULT_COMMAND_TIMEOUT_MS } = {}) =>
   new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
     let stderr = "";
     let stdout = "";
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      callback(value);
+    };
+    const timeoutId = setTimeout(() => {
+      child.kill("SIGTERM");
+      finish(reject, new Error(`${command} timed out after ${timeoutMs}ms.`));
+    }, timeoutMs);
 
     child.stdout.on("data", (chunk) => {
       stdout += chunk.toString();
@@ -67,14 +107,14 @@ const runCommand = (command, args) =>
       stderr += chunk.toString();
     });
     child.on("error", (error) => {
-      reject(error);
+      finish(reject, error);
     });
     child.on("close", (code) => {
       if (code === 0) {
-        resolve({ stdout, stderr });
+        finish(resolve, { stdout, stderr });
         return;
       }
-      reject(new Error(`${command} exited with code ${code}: ${stderr || stdout}`));
+      finish(reject, new Error(`${command} exited with code ${code}: ${stderr || stdout}`));
     });
   });
 
@@ -168,13 +208,11 @@ export class OpenAiService {
       throw new Error("OPENAI_API_KEY is missing.");
     }
 
-    const mediaResponse = await fetch(mediaUrl);
-    if (!mediaResponse.ok) {
-      throw new Error(`Could not download media for transcription: ${mediaResponse.status} ${mediaResponse.statusText}`);
-    }
-
-    const arrayBuffer = await mediaResponse.arrayBuffer();
-    const file = await toFile(Buffer.from(arrayBuffer), filename);
+    const buffer = await fetchArrayBufferWithTimeout({
+      url: mediaUrl,
+      timeoutMs: env.transcriptionDownloadTimeoutMs
+    });
+    const file = await toFile(buffer, filename);
 
     let response;
     try {
@@ -184,6 +222,8 @@ export class OpenAiService {
         file,
         model,
         response_format: responseFormat
+      }, {
+        timeout: env.openaiTranscriptionTimeoutMs
       });
     } catch (error) {
       const meta = extractOpenAiErrorMeta(error);
@@ -218,11 +258,10 @@ export class OpenAiService {
 
     try {
       logger.info?.("Downloading media for OpenAI transcription", { mediaUrl });
-      const mediaResponse = await fetch(mediaUrl);
-      if (!mediaResponse.ok) {
-        throw new Error(`Could not download media for transcription: ${mediaResponse.status} ${mediaResponse.statusText}`);
-      }
-      const buffer = Buffer.from(await mediaResponse.arrayBuffer());
+      const buffer = await fetchArrayBufferWithTimeout({
+        url: mediaUrl,
+        timeoutMs: env.transcriptionDownloadTimeoutMs
+      });
       await fs.writeFile(inputPath, buffer);
 
       const chunks = await this.buildTranscriptionChunks({
@@ -321,7 +360,7 @@ export class OpenAiService {
 
     let ffmpegAvailable = true;
     try {
-      await runCommand("ffmpeg", ["-version"]);
+      await runCommand("ffmpeg", ["-version"], { timeoutMs: env.transcriptionCommandTimeoutMs });
     } catch {
       ffmpegAvailable = false;
     }
@@ -360,7 +399,7 @@ export class OpenAiService {
       "-reset_timestamps",
       "1",
       outPattern
-    ]);
+    ], { timeoutMs: env.transcriptionCommandTimeoutMs });
 
     const entries = await fs.readdir(runDir);
     const chunkNames = entries
@@ -383,6 +422,8 @@ export class OpenAiService {
         file,
         model,
         response_format: responseFormat
+      }, {
+        timeout: env.openaiTranscriptionTimeoutMs
       });
     } catch (error) {
       const meta = extractOpenAiErrorMeta(error);

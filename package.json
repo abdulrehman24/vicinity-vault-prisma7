@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "next lint",
     "sync:vimeo": "node scripts/sync-vimeo.js",
+    "worker:sync": "node scripts/sync-worker.js",
     "check:env": "node scripts/check-env.js",
     "check:env:strict": "node scripts/check-env.js --strict"
   },

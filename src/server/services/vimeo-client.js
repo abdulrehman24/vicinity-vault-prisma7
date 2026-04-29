@@ -1,6 +1,24 @@
 import { env } from "../config/env";
 
 const VIMEO_API_BASE = "https://api.vimeo.com";
+const SERVICE_UNAVAILABLE_STATUS = 503;
+const INITIAL_503_RETRY_MS = 30_000;
+const FOLLOWUP_503_RETRY_MS = 60_000;
+const MAX_503_RETRIES = 6;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const parseRetryAfterToMs = (headerValue) => {
+  if (!headerValue) return null;
+  const numeric = Number(headerValue);
+  if (Number.isFinite(numeric) && numeric >= 0) {
+    return numeric * 1000;
+  }
+  const date = new Date(headerValue);
+  if (Number.isNaN(date.getTime())) return null;
+  const diff = date.getTime() - Date.now();
+  return diff > 0 ? diff : null;
+};
 
 const parseTags = (tagPayload) => {
   if (!Array.isArray(tagPayload)) return [];
@@ -73,29 +91,56 @@ export class VimeoClient {
       throw new Error("VIMEO_ACCESS_TOKEN is missing.");
     }
 
-    this.logger.debug?.("Vimeo request started", { path, method: init.method || "GET" });
-    const response = await fetch(`${VIMEO_API_BASE}${path}`, {
-      ...init,
-      headers: {
-        Authorization: `Bearer ${this.accessToken}`,
-        Accept: "application/json",
-        ...(init.headers || {})
-      }
-    });
+    let attempt = 0;
+    while (true) {
+      this.logger.debug?.("Vimeo request started", {
+        path,
+        method: init.method || "GET",
+        attempt: attempt + 1
+      });
 
-    if (!response.ok) {
+      const response = await fetch(`${VIMEO_API_BASE}${path}`, {
+        ...init,
+        headers: {
+          Authorization: `Bearer ${this.accessToken}`,
+          Accept: "application/json",
+          ...(init.headers || {})
+        }
+      });
+
+      if (response.ok) {
+        this.logger.debug?.("Vimeo request succeeded", { path, status: response.status, attempt: attempt + 1 });
+        return response.json();
+      }
+
       const body = await response.text();
+      const canRetry503 = response.status === SERVICE_UNAVAILABLE_STATUS && attempt < MAX_503_RETRIES;
+      if (canRetry503) {
+        const retryAfterMs = parseRetryAfterToMs(response.headers.get("retry-after"));
+        const fallbackMs = attempt === 0 ? INITIAL_503_RETRY_MS : FOLLOWUP_503_RETRY_MS;
+        const waitMs = Math.max(fallbackMs, retryAfterMs || 0);
+
+        this.logger.warn?.("Vimeo API 503 received; retrying request", {
+          path,
+          attempt: attempt + 1,
+          maxRetries: MAX_503_RETRIES,
+          waitSeconds: Math.round(waitMs / 1000)
+        });
+
+        attempt += 1;
+        await sleep(waitMs);
+        continue;
+      }
+
       this.logger.error?.("Vimeo request failed", {
         path,
         status: response.status,
         statusText: response.statusText,
-        responseBody: body
+        responseBody: body,
+        attempt: attempt + 1
       });
       throw new Error(`Vimeo API ${response.status} ${response.statusText}: ${body}`);
     }
-
-    this.logger.debug?.("Vimeo request succeeded", { path, status: response.status });
-    return response.json();
   }
 
   async listVideos({ page = 1, perPage = 50, maxPages = 0 } = {}) {

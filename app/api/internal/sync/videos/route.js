@@ -1,25 +1,25 @@
 import { NextResponse } from "next/server";
+import { sync_run_trigger } from "@prisma/client";
 import { prisma } from "@/src/server/db/prisma";
-import { assertAdminRequest } from "@/src/server/auth/admin";
-import { VideoSyncService } from "@/src/server/services/video-sync-service";
+import { SyncJobService } from "@/src/server/services/sync-job-service";
 
 export const runtime = "nodejs";
 
 export async function POST(request) {
   try {
-    const user = await assertAdminRequest(request, prisma);
     const body = await request.json().catch(() => ({}));
-    const syncService = new VideoSyncService({ prisma });
+    const syncService = new SyncJobService({ prisma });
 
-    const result = await syncService.runSync({
+    const result = await syncService.enqueueVimeoSync({
       dataSourceId: body?.dataSourceId || null,
-      initiatedByUserId: user.id,
+      initiatedByUserId: null,
+      trigger: sync_run_trigger.manual,
       perPage: Number.isFinite(body?.perPage) ? Number(body.perPage) : 50,
       maxPages: Number.isFinite(body?.maxPages) ? Number(body.maxPages) : 0,
       testVideoLimit: Number.isFinite(body?.testVideoLimit) ? Number(body.testVideoLimit) : null
     });
 
-    return NextResponse.json(result, { status: 200 });
+    return NextResponse.json(result, { status: result.status === "accepted" ? 202 : 200 });
   } catch (error) {
     return NextResponse.json(
       {

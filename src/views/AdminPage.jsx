@@ -191,7 +191,7 @@ export default function AdminPage() {
 
   useEffect(() => {
     if (activeTab !== "system") return;
-    const hasRunningRun = (systemData?.recentRuns || []).some((run) => run.status === "running");
+    const hasRunningRun = (systemData?.recentRuns || []).some((run) => ["queued", "running"].includes(run.status));
     if (!hasRunningRun) return;
 
     const intervalId = window.setInterval(() => {
@@ -264,10 +264,10 @@ export default function AdminPage() {
     try {
       resetMessages();
       setIsSyncing(true);
-      toast.message("Global sync started");
+      toast.message("Global sync queued");
       await apiFetch("/api/admin/system/sync", { method: "POST", body: JSON.stringify({}) });
-      setPageSuccess("Global sync triggered.");
-      toast.success("Sync triggered");
+      setPageSuccess("Global sync queued.");
+      toast.success("Sync queued");
       await loadSources();
       await Promise.all([loadSystem(), loadSyncErrors(syncErrorFilter)]);
     } catch (error) {
@@ -310,13 +310,13 @@ export default function AdminPage() {
       if (!syncRunId) return;
       resetMessages();
       setRetryingRunId(syncRunId);
-      toast.message("Retry sync started");
+      toast.message("Retry sync queued");
       await apiFetch("/api/admin/system/retry", {
         method: "POST",
         body: JSON.stringify({ syncRunId })
       });
-      setPageSuccess("Retry sync completed.");
-      toast.success("Retry sync completed");
+      setPageSuccess("Retry sync queued.");
+      toast.success("Retry sync queued");
       await loadSources();
       await Promise.all([loadSystem(), loadSyncErrors(syncErrorFilter)]);
     } catch (error) {
@@ -345,13 +345,13 @@ export default function AdminPage() {
         const source = (sources || []).find((item) => item.id === sourceId);
         const sourceName = source?.name || "Unknown";
         const hasRunningForSource = (prev.recentRuns || []).some(
-          (run) => run.status === "running" && run.sourceName === sourceName
+          (run) => ["queued", "running"].includes(run.status) && run.sourceName === sourceName
         );
         if (hasRunningForSource) return prev;
         const localRun = {
           id: `local-${sourceId}-${Date.now()}`,
           sourceName,
-          status: "running",
+          status: "queued",
           trigger: "manual",
           notes: null,
           retryOfRunId: null,
@@ -370,10 +370,10 @@ export default function AdminPage() {
           recentRuns: [localRun, ...(prev.recentRuns || [])].slice(0, 10)
         };
       });
-      toast.message("Source sync started");
+      toast.message("Source sync queued");
       await apiFetch(`/api/admin/sources/${sourceId}/sync`, { method: "POST", body: JSON.stringify({}) });
-      setPageSuccess("Source sync started.");
-      toast.success("Source sync triggered");
+      setPageSuccess("Source sync queued.");
+      toast.success("Source sync queued");
       await loadSources();
       await loadSystem();
     } catch (error) {
@@ -693,7 +693,7 @@ export default function AdminPage() {
               </button>
               <button onClick={handleSync} disabled={isSyncing} className="bg-vicinity-peach text-vicinity-slate px-10 py-5 rounded-2xl font-black hover:bg-white transition-all flex items-center justify-center gap-3 uppercase tracking-widest text-xs disabled:opacity-60">
                 <SafeIcon name="RefreshCw" className={isSyncing ? "animate-spin" : ""} />
-                {isSyncing ? "Syncing All Vaults..." : "Manual Sync All"}
+                {isSyncing ? "Queueing Sync..." : "Manual Sync All"}
               </button>
               <button
                 onClick={() => setTruncateConfirmOpen(true)}
@@ -742,7 +742,7 @@ export default function AdminPage() {
                             className={`px-3 py-1 rounded-full text-[8px] font-black border uppercase tracking-widest ${
                               run.status === "success"
                                 ? "bg-green-500/10 text-green-400 border-green-500/20"
-                                : run.status === "running"
+                                : ["queued", "running"].includes(run.status)
                                 ? "bg-blue-500/10 text-blue-300 border-blue-500/20"
                                 : run.status === "partial"
                                 ? "bg-yellow-500/10 text-yellow-300 border-yellow-500/20"
