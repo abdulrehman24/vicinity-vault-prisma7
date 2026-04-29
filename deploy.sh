@@ -5,6 +5,7 @@ set -euo pipefail
 APP_DIR="/var/www/vault"
 APP_NAME="vault"
 SYNC_WORKER_NAME="vimeo-vault-sync-worker"
+LEGACY_SYNC_WORKER_NAME="vimeo-va"
 BRANCH="${1:-main}"
 RUN_NGINX_RELOAD="${RUN_NGINX_RELOAD:-true}"
 SYNC_BASE_URL="${SYNC_BASE_URL:-http://127.0.0.1:3000}"
@@ -41,10 +42,13 @@ npm run build
 
 echo "[deploy] Restarting PM2 app..."
 if pm2 describe "$APP_NAME" >/dev/null 2>&1; then
-  pm2 restart "$APP_NAME"
+  pm2 restart "$APP_NAME" --update-env
 else
   pm2 start npm --name "$APP_NAME" -- start
 fi
+
+echo "[deploy] Removing legacy sync worker process names (if any)..."
+pm2 delete "$LEGACY_SYNC_WORKER_NAME" >/dev/null 2>&1 || true
 
 echo "[deploy] Restarting sync worker..."
 if pm2 describe "$SYNC_WORKER_NAME" >/dev/null 2>&1; then
@@ -55,6 +59,7 @@ fi
 
 echo "[deploy] Saving PM2 process list..."
 pm2 save
+pm2 list
 
 if [[ "$RUN_NGINX_RELOAD" == "true" ]]; then
   echo "[deploy] Testing Nginx config..."

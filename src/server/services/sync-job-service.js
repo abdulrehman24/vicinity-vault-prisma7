@@ -6,6 +6,7 @@ import {
   sync_run_trigger
 } from "@prisma/client";
 import { VideoSyncService } from "./video-sync-service";
+import { createSyncLogger } from "../logging/sync-logger";
 
 const DEFAULT_STALE_LOCK_MS = 30 * 60 * 1000;
 
@@ -15,10 +16,10 @@ const asFiniteNumber = (value, fallback) => {
 };
 
 export class SyncJobService {
-  constructor({ prisma, logger = console, workerId = null }) {
+  constructor({ prisma, logger = null, workerId = null }) {
     this.prisma = prisma;
-    this.logger = logger;
     this.workerId = workerId || `worker-${process.pid || "unknown"}`;
+    this.logger = logger || createSyncLogger({ service: "sync-job", workerId: this.workerId });
   }
 
   async getSyncableSources({ dataSourceId = null } = {}) {
