@@ -88,7 +88,17 @@ fi
 
 if [[ "$SYNC_WORKER_INSTANCES" =~ ^[0-9]+$ ]] && [[ "$SYNC_WORKER_INSTANCES" -ge 1 ]]; then
   echo "[deploy] Scaling sync workers to $SYNC_WORKER_INSTANCES instance(s)..."
-  pm2 scale "$SYNC_WORKER_NAME" "$SYNC_WORKER_INSTANCES"
+  scale_output="$(pm2 scale "$SYNC_WORKER_NAME" "$SYNC_WORKER_INSTANCES" 2>&1)" || {
+    if echo "$scale_output" | grep -q "Nothing to do"; then
+      echo "[deploy] Worker scale already at target ($SYNC_WORKER_INSTANCES)."
+    else
+      echo "$scale_output"
+      exit 1
+    fi
+  }
+  if [[ -n "${scale_output:-}" ]]; then
+    echo "$scale_output"
+  fi
 else
   echo "[deploy] WARN: Invalid SYNC_WORKER_INSTANCES='$SYNC_WORKER_INSTANCES'. Keeping current PM2 scale."
 fi
