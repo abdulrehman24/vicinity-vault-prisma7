@@ -39,6 +39,7 @@ export const env = {
   allowedGoogleDomain: asOptional(process.env.ALLOWED_GOOGLE_DOMAIN),
   enableSyncFileLogs: asBoolean(process.env.ENABLE_SYNC_FILE_LOGS, true),
   syncTestVideoLimit: asPositiveOrNull(process.env.SYNC_TEST_VIDEO_LIMIT),
+  syncResumeEnabled: asBoolean(process.env.SYNC_RESUME_ENABLED, true),
   transcriptionDownloadTimeoutMs: asNumber(process.env.TRANSCRIPTION_DOWNLOAD_TIMEOUT_MS, 120000),
   transcriptionCommandTimeoutMs: asNumber(process.env.TRANSCRIPTION_COMMAND_TIMEOUT_MS, 180000),
   openaiTranscriptionTimeoutMs: asNumber(process.env.OPENAI_TRANSCRIPTION_TIMEOUT_MS, 180000)

@@ -22,6 +22,7 @@ export async function POST(request) {
       initiatedByUserId: user.id,
       trigger: sync_run_trigger.manual,
       runTypeTag: requestedRunTypeTag,
+      resetCursor: Boolean(body?.resetCursor),
       perPage: Number.isFinite(body?.perPage) ? Number(body.perPage) : 50,
       maxPages: Number.isFinite(body?.maxPages) ? Number(body.maxPages) : 0,
       testVideoLimit: Number.isFinite(body?.testVideoLimit) ? Number(body.testVideoLimit) : null

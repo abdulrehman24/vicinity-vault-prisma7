@@ -240,6 +240,7 @@ export class VideoSyncService {
     initiatedByUserId = null,
     trigger = sync_run_trigger.manual,
     runTypeTag = null,
+    resetCursor = false,
     enableTranscript = true,
     enableEmbeddings = true,
     enableCategorization = true,
@@ -691,7 +692,23 @@ export class VideoSyncService {
         await Promise.all(workers);
       };
 
-      let currentPage = 1;
+      const resumeEnabled =
+        env.syncResumeEnabled &&
+        runTypeTag === "ingest_only" &&
+        !resetCursor &&
+        Number.isFinite(Number(dataSource.sync_cursor_page)) &&
+        Number(dataSource.sync_cursor_page) > 0;
+      const resumeStartPage = resumeEnabled ? Math.floor(Number(dataSource.sync_cursor_page)) : 1;
+      let resumeGuardVimeoId = resumeEnabled ? String(dataSource.sync_cursor_vimeo_id || "").trim() : "";
+      if (resumeEnabled) {
+        runLogger.info("Resuming fast sync from cursor", {
+          startPage: resumeStartPage,
+          lastVimeoVideoId: resumeGuardVimeoId || null,
+          cursorUpdatedAt: dataSource.sync_cursor_updated_at || null
+        });
+      }
+
+      let currentPage = resumeStartPage;
       let pagesFetched = 0;
       let hasMore = true;
       let remainingTestLimit = effectiveTestLimit;
@@ -700,6 +717,25 @@ export class VideoSyncService {
         const pageResult = await vimeoClient.listVideosPage({ page: currentPage, perPage });
         const fetchedVideos = pageResult.videos;
         let videosToProcess = fetchedVideos;
+
+        if (resumeGuardVimeoId && currentPage === resumeStartPage) {
+          const cursorIndex = videosToProcess.findIndex((video) => video.vimeoVideoId === resumeGuardVimeoId);
+          if (cursorIndex >= 0) {
+            videosToProcess = videosToProcess.slice(cursorIndex + 1);
+            runLogger.info("Applied cursor guard on resumed page", {
+              page: currentPage,
+              cursorVimeoVideoId: resumeGuardVimeoId,
+              skipped: cursorIndex + 1,
+              remaining: videosToProcess.length
+            });
+          } else {
+            runLogger.warn("Cursor Vimeo video id not found on resumed page", {
+              page: currentPage,
+              cursorVimeoVideoId: resumeGuardVimeoId
+            });
+          }
+          resumeGuardVimeoId = "";
+        }
 
         if (progressTotalVideos === null && Number.isFinite(pageResult.totalCount)) {
           const progressCaps = [pageResult.totalCount];
@@ -747,6 +783,19 @@ export class VideoSyncService {
         await queueRunProgressFlush({ force: true });
 
         await processVideoBatch({ videos: videosToProcess, page: currentPage });
+
+        if (videosToProcess.length > 0) {
+          const lastProcessedVideo = videosToProcess[videosToProcess.length - 1];
+          await this.prisma.data_sources.update({
+            where: { id: dataSource.id },
+            data: {
+              sync_cursor_page: currentPage,
+              sync_cursor_vimeo_id: lastProcessedVideo.vimeoVideoId,
+              sync_cursor_published_at: toDateOrNull(lastProcessedVideo.publishedAt),
+              sync_cursor_updated_at: new Date()
+            }
+          });
+        }
 
         pagesFetched += 1;
         hasMore = pageResult.hasMore;

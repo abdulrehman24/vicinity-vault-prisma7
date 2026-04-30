@@ -23,6 +23,10 @@ export class AdminSourceService {
       hasAccessToken: Boolean(source.access_token_encrypted),
       accessTokenMasked: maskSecret(source.access_token_encrypted),
       lastSyncAt: source.last_sync_at,
+      syncCursorPage: source.sync_cursor_page,
+      syncCursorVimeoId: source.sync_cursor_vimeo_id,
+      syncCursorPublishedAt: source.sync_cursor_published_at,
+      syncCursorUpdatedAt: source.sync_cursor_updated_at,
       videoCount: source.video_count,
       createdAt: source.created_at,
       updatedAt: source.updated_at
@@ -72,6 +76,12 @@ export class AdminSourceService {
       if (normalized) {
         data.access_token_encrypted = encryptSecret(normalized);
       }
+    }
+    if (input?.resetSyncCursor === true) {
+      data.sync_cursor_page = null;
+      data.sync_cursor_vimeo_id = null;
+      data.sync_cursor_published_at = null;
+      data.sync_cursor_updated_at = null;
     }
 
     const row = await this.prisma.data_sources.update({

@@ -143,6 +143,10 @@ model data_sources {
   access_token_encrypted        String?
   status                        source_status   @default(connected)
   last_sync_at                  DateTime?       @db.Timestamptz(6)
+  sync_cursor_page              Int?
+  sync_cursor_vimeo_id          String?
+  sync_cursor_published_at      DateTime?       @db.Timestamptz(6)
+  sync_cursor_updated_at        DateTime?       @db.Timestamptz(6)
   video_count                   Int             @default(0)
   created_by_user_id            String?         @db.Uuid
   created_at                    DateTime        @default(now()) @db.Timestamptz(6)

@@ -333,7 +333,7 @@ export default function AdminPage() {
     }
   };
 
-  const handleSourceSync = async (sourceId) => {
+  const handleSourceSync = async (sourceId, { resetCursor = false } = {}) => {
     try {
       resetMessages();
       setSyncingSourceIds((prev) => (prev.includes(sourceId) ? prev : [...prev, sourceId]));
@@ -380,7 +380,7 @@ export default function AdminPage() {
       toast.message("Source sync queued");
       await apiFetch(`/api/admin/sources/${sourceId}/sync`, {
         method: "POST",
-        body: JSON.stringify({ ingestOnly: true })
+        body: JSON.stringify({ ingestOnly: true, resetCursor })
       });
       setPageSuccess("Source sync queued.");
       toast.success("Source sync queued");
@@ -393,6 +393,22 @@ export default function AdminPage() {
       await loadSystem();
     } finally {
       setSyncingSourceIds((prev) => prev.filter((id) => id !== sourceId));
+    }
+  };
+
+  const handleResetSourceCursor = async (sourceId) => {
+    try {
+      resetMessages();
+      await apiFetch(`/api/admin/sources/${sourceId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ resetSyncCursor: true })
+      });
+      setPageSuccess("Sync cursor reset.");
+      toast.success("Source sync cursor reset");
+      await loadSources();
+    } catch (error) {
+      setPageError(error.message);
+      toast.error(error.message || "Failed to reset sync cursor");
     }
   };
 
@@ -962,6 +978,7 @@ export default function AdminPage() {
             <div className="text-left">
               <h2 className="text-2xl font-bold text-white tracking-tight">Vimeo Data Sources</h2>
               <p className="text-[10px] text-vicinity-peach/40 uppercase tracking-widest font-black mt-1">Manage multiple API integrations for the semantic index.</p>
+              <p className="text-[10px] text-white/40 mt-2">Fast Sync resumes from saved cursor. Use "Sync From Start" or "Reset Sync Cursor" to restart from page 1.</p>
             </div>
             <button onClick={() => { setSourceForm({ id: null, name: "", accessToken: "", status: "connected" }); setIsAddingSource(true); }} className="bg-vicinity-peach text-vicinity-slate px-8 py-4 rounded-2xl font-black hover:bg-white transition-all uppercase tracking-widest text-xs flex items-center gap-2">
               <SafeIcon name="Plus" /> Add New Source
@@ -975,6 +992,7 @@ export default function AdminPage() {
                   <th className="px-10 py-5">Platform</th>
                   <th className="px-10 py-5">Status</th>
                   <th className="px-10 py-5">Videos</th>
+                  <th className="px-10 py-5">Sync Cursor</th>
                   <th className="px-10 py-5 text-right">Actions</th>
                 </tr>
               </thead>
@@ -1001,6 +1019,13 @@ export default function AdminPage() {
                         }`}>{source.status}</span>
                       </td>
                       <td className="px-10 py-6 text-vicinity-peach font-bold">{Number(source.videoCount || 0).toLocaleString()}</td>
+                      <td className="px-10 py-6 text-white/60 text-xs">
+                        <div className="space-y-1">
+                          <p>Page: <span className="text-white/80 font-bold">{source.syncCursorPage || "-"}</span></p>
+                          <p className="break-all">Last ID: <span className="text-white/80 font-bold">{source.syncCursorVimeoId || "-"}</span></p>
+                          <p>Updated: <span className="text-white/80 font-bold">{source.syncCursorUpdatedAt ? new Date(source.syncCursorUpdatedAt).toLocaleString() : "Never"}</span></p>
+                        </div>
+                      </td>
                       <td className="px-10 py-6 text-right">
                         <div className="flex justify-end gap-2">
                           <button
@@ -1015,9 +1040,25 @@ export default function AdminPage() {
                             onClick={() => handleSourceSync(source.id)}
                             disabled={isSourceSyncing}
                             className="p-2 text-white/20 hover:text-vicinity-peach transition-colors disabled:opacity-50"
-                            title="Sync Source"
+                            title="Fast Sync Source"
                           >
                             <SafeIcon name="RefreshCw" />
+                          </button>
+                          <button
+                            onClick={() => handleSourceSync(source.id, { resetCursor: true })}
+                            disabled={isSourceSyncing}
+                            className="p-2 text-white/20 hover:text-orange-300 transition-colors disabled:opacity-50"
+                            title="Sync Source From Start"
+                          >
+                            <SafeIcon name="RotateCcw" />
+                          </button>
+                          <button
+                            onClick={() => handleResetSourceCursor(source.id)}
+                            disabled={isSourceSyncing}
+                            className="p-2 text-white/20 hover:text-yellow-300 transition-colors disabled:opacity-50"
+                            title="Reset Sync Cursor"
+                          >
+                            <SafeIcon name="Eraser" />
                           </button>
                           <button
                             onClick={() => handleSourceRebuildEmbeddings(source.id)}
