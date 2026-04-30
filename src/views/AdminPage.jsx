@@ -88,7 +88,7 @@ export default function AdminPage() {
   const [isDeletingGenre, setIsDeletingGenre] = useState(false);
   const [truncateConfirmOpen, setTruncateConfirmOpen] = useState(false);
   const [isTruncatingData, setIsTruncatingData] = useState(false);
-  const [manualSyncMode, setManualSyncMode] = useState("ingest_only");
+  const [manualSyncMode, setManualSyncMode] = useState("baseline_full_sync");
 
   const apiFetch = async (url, init = {}) => {
     const response = await fetch(url, {
