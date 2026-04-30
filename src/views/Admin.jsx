@@ -226,8 +226,11 @@ export default function Admin() {
                   <div>
                     <label className="block text-[10px] font-black text-vicinity-peach uppercase tracking-widest mb-3">Explanation Engine</label>
                     <select value={aiConfig.completionModel} onChange={(e) => handleAiUpdate("completionModel", e.target.value)} className="w-full px-6 py-4 bg-[#4a5a67] border border-white/10 rounded-2xl text-white font-bold text-sm outline-none">
-                      <option value="gpt-4o-mini">GPT-4o Mini (Fast)</option>
-                      <option value="gpt-4o">GPT-4o (Premium)</option>
+                      <option value="gpt-5-nano">gpt-5-nano (Lowest Cost)</option>
+                      <option value="gpt-5-mini">gpt-5-mini (Balanced)</option>
+                      <option value="gpt-5">gpt-5 (High Quality)</option>
+                      <option value="gpt-4o-mini">gpt-4o-mini (Legacy)</option>
+                      <option value="gpt-4o">gpt-4o (Legacy Premium)</option>
                     </select>
                   </div>
                 </div>

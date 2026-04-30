@@ -64,7 +64,7 @@ export default function AdminPage() {
     openAiKeyMasked: null,
     openAiKey: "",
     embeddingModel: "text-embedding-3-small",
-    explanationModel: "gpt-4o-mini",
+    explanationModel: "gpt-5-nano",
     matchSensitivity: 0.65,
     matchReasonPrompt:
       "In one short, punchy sentence, explain to a salesperson why this video is a good match for the client brief. Start with 'Matches because...'",
@@ -1171,9 +1171,11 @@ export default function AdminPage() {
                   <div>
                     <label className="block text-[10px] font-black text-vicinity-peach uppercase tracking-widest mb-3">Explanation Engine</label>
                     <select value={aiConfig.explanationModel} onChange={(e) => handleAiUpdate("explanationModel", e.target.value)} className="w-full px-6 py-4 bg-[#4a5a67] border border-white/10 rounded-2xl text-white font-bold text-sm outline-none">
-                      <option value="gpt-4o-mini">gpt-4o-mini</option>
-                      <option value="gpt-4o-mini-transcribe">gpt-4o-mini-transcribe</option>
-                      <option value="gpt-4o">gpt-4o</option>
+                      <option value="gpt-5-nano">gpt-5-nano (Lowest Cost)</option>
+                      <option value="gpt-5-mini">gpt-5-mini (Balanced)</option>
+                      <option value="gpt-5">gpt-5 (High Quality)</option>
+                      <option value="gpt-4o-mini">gpt-4o-mini (Legacy)</option>
+                      <option value="gpt-4o">gpt-4o (Legacy Premium)</option>
                     </select>
                   </div>
                 </div>

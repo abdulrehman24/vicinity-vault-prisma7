@@ -218,13 +218,23 @@ export class VideoSyncService {
     });
 
     await this.prisma.video_tags.deleteMany({ where: { video_id: video.id } });
-    const uniqueTags = Array.from(new Set((vimeoVideo.tags || []).map((tag) => String(tag).trim()).filter(Boolean)));
+    const uniqueTags = Array.from(
+      new Map(
+        (vimeoVideo.tags || [])
+          .map((tag) => String(tag || "").trim())
+          .filter(Boolean)
+          .map((tag) => [tag.toLowerCase(), tag])
+      ).values()
+    );
     if (uniqueTags.length) {
       await this.prisma.video_tags.createMany({
         data: uniqueTags.map((tag) => ({
           video_id: video.id,
-          tag
-        }))
+          tag,
+          normalized_tag: tag.toLowerCase()
+        })),
+        // Prevent race-condition failures when concurrent workers process the same video.
+        skipDuplicates: true
       });
     }
 

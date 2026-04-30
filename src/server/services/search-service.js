@@ -595,8 +595,8 @@ export class SearchService {
     const aiReasonMap = new Map();
     if (openai?.isConfigured()) {
       try {
-        const explanationModel = String(runtimeAiConfig?.explanationModel || "gpt-4o-mini");
-        const safeModel = explanationModel.includes("transcribe") ? "gpt-4o-mini" : explanationModel;
+        const explanationModel = String(runtimeAiConfig?.explanationModel || "gpt-5-nano");
+        const safeModel = explanationModel.includes("transcribe") ? "gpt-5-nano" : explanationModel;
         const aiCandidates = buildExplanationCandidates(rankedEntries);
         const reasons = await openai.generateMatchReasons({
           query: q,

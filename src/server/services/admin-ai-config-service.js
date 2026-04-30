@@ -5,6 +5,14 @@ const DEFAULT_PROMPT =
   "In one short, punchy sentence, explain to a salesperson why this video is a good match for the client brief. Start with 'Matches because...'";
 const ALLOWED_EMBEDDING_MODELS = new Set(["text-embedding-3-small"]);
 const ALLOWED_TRANSCRIPTION_MODELS = new Set(["whisper-1", "gpt-4o-mini-transcribe", "gpt-4o-transcribe"]);
+const DEFAULT_EXPLANATION_MODEL = "gpt-5-nano";
+const ALLOWED_EXPLANATION_MODELS = new Set([
+  "gpt-5-nano",
+  "gpt-5-mini",
+  "gpt-5",
+  "gpt-4o-mini",
+  "gpt-4o"
+]);
 
 const normalizeEmbeddingModel = (value, fallback) => {
   const model = String(value || "").trim();
@@ -15,6 +23,12 @@ const normalizeEmbeddingModel = (value, fallback) => {
 const normalizeTranscriptionModel = (value, fallback) => {
   const model = String(value || "").trim();
   if (ALLOWED_TRANSCRIPTION_MODELS.has(model)) return model;
+  return fallback;
+};
+
+const normalizeExplanationModel = (value, fallback = DEFAULT_EXPLANATION_MODEL) => {
+  const model = String(value || "").trim();
+  if (ALLOWED_EXPLANATION_MODELS.has(model)) return model;
   return fallback;
 };
 
@@ -30,7 +44,7 @@ export class AdminAiConfigService {
         data: {
           singleton: true,
           embedding_model: env.openaiEmbeddingModel,
-          explanation_model: "gpt-4o-mini",
+          explanation_model: DEFAULT_EXPLANATION_MODEL,
           match_sensitivity: 0.65,
           match_reason_prompt: DEFAULT_PROMPT,
           auto_sync_embeddings: true
@@ -47,7 +61,7 @@ export class AdminAiConfigService {
       hasOpenAiKey: Boolean(config.openai_api_key_encrypted),
       openAiKeyMasked: maskSecret(config.openai_api_key_encrypted),
       embeddingModel,
-      explanationModel: config.explanation_model,
+      explanationModel: normalizeExplanationModel(config.explanation_model),
       matchSensitivity: Number(config.match_sensitivity),
       matchReasonPrompt: config.match_reason_prompt,
       autoSyncEmbeddings: config.auto_sync_embeddings,
@@ -67,7 +81,10 @@ export class AdminAiConfigService {
         updates.embeddingModel ?? current.embedding_model,
         "text-embedding-3-small"
       ),
-      explanation_model: updates.explanationModel ?? current.explanation_model,
+      explanation_model: normalizeExplanationModel(
+        updates.explanationModel ?? current.explanation_model,
+        current.explanation_model || DEFAULT_EXPLANATION_MODEL
+      ),
       match_sensitivity:
         updates.matchSensitivity != null ? Number(updates.matchSensitivity) : Number(current.match_sensitivity),
       match_reason_prompt: updates.matchReasonPrompt ?? current.match_reason_prompt,
@@ -113,7 +130,7 @@ export class AdminAiConfigService {
         configuredModel || env.openaiTranscriptionModel,
         "whisper-1"
       ),
-      explanationModel: config.explanation_model,
+      explanationModel: normalizeExplanationModel(config.explanation_model),
       matchSensitivity: Number(config.match_sensitivity),
       matchReasonPrompt: config.match_reason_prompt,
       autoSyncEmbeddings: config.auto_sync_embeddings
