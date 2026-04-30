@@ -14,6 +14,7 @@ export async function POST(request) {
       dataSourceId: body?.dataSourceId || null,
       initiatedByUserId: null,
       trigger: sync_run_trigger.manual,
+      runTypeTag: "baseline_full_sync",
       perPage: Number.isFinite(body?.perPage) ? Number(body.perPage) : 50,
       maxPages: Number.isFinite(body?.maxPages) ? Number(body.maxPages) : 0,
       testVideoLimit: Number.isFinite(body?.testVideoLimit) ? Number(body.testVideoLimit) : null

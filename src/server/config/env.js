@@ -21,6 +21,11 @@ const asNumber = (value, fallback) => {
   return Number.isFinite(number) && number > 0 ? number : fallback;
 };
 
+const asPositiveOrNull = (value) => {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : null;
+};
+
 export const env = {
   databaseUrl: asOptional(process.env.DATABASE_URL),
   vimeoAccessToken: asOptional(process.env.VIMEO_ACCESS_TOKEN),
@@ -33,6 +38,7 @@ export const env = {
   nextAuthSecret: asOptional(process.env.NEXTAUTH_SECRET),
   allowedGoogleDomain: asOptional(process.env.ALLOWED_GOOGLE_DOMAIN),
   enableSyncFileLogs: asBoolean(process.env.ENABLE_SYNC_FILE_LOGS, true),
+  syncTestVideoLimit: asPositiveOrNull(process.env.SYNC_TEST_VIDEO_LIMIT),
   transcriptionDownloadTimeoutMs: asNumber(process.env.TRANSCRIPTION_DOWNLOAD_TIMEOUT_MS, 120000),
   transcriptionCommandTimeoutMs: asNumber(process.env.TRANSCRIPTION_COMMAND_TIMEOUT_MS, 180000),
   openaiTranscriptionTimeoutMs: asNumber(process.env.OPENAI_TRANSCRIPTION_TIMEOUT_MS, 180000)

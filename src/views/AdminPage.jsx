@@ -88,6 +88,7 @@ export default function AdminPage() {
   const [isDeletingGenre, setIsDeletingGenre] = useState(false);
   const [truncateConfirmOpen, setTruncateConfirmOpen] = useState(false);
   const [isTruncatingData, setIsTruncatingData] = useState(false);
+  const [manualSyncMode, setManualSyncMode] = useState("ingest_only");
 
   const apiFetch = async (url, init = {}) => {
     const response = await fetch(url, {
@@ -265,7 +266,12 @@ export default function AdminPage() {
       resetMessages();
       setIsSyncing(true);
       toast.message("Global sync queued");
-      await apiFetch("/api/admin/system/sync", { method: "POST", body: JSON.stringify({}) });
+      await apiFetch("/api/admin/system/sync", {
+        method: "POST",
+        body: JSON.stringify({
+          runTypeTag: manualSyncMode
+        })
+      });
       setPageSuccess("Global sync queued.");
       toast.success("Sync queued");
       await loadSources();
@@ -355,6 +361,7 @@ export default function AdminPage() {
           trigger: "manual",
           notes: null,
           retryOfRunId: null,
+          startedAt: null,
           createdAt: new Date().toISOString(),
           finishedAt: null,
           errorCount: 0,
@@ -371,7 +378,10 @@ export default function AdminPage() {
         };
       });
       toast.message("Source sync queued");
-      await apiFetch(`/api/admin/sources/${sourceId}/sync`, { method: "POST", body: JSON.stringify({}) });
+      await apiFetch(`/api/admin/sources/${sourceId}/sync`, {
+        method: "POST",
+        body: JSON.stringify({ ingestOnly: true })
+      });
       setPageSuccess("Source sync queued.");
       toast.success("Source sync queued");
       await loadSources();
@@ -683,6 +693,15 @@ export default function AdminPage() {
               <p className="text-xs text-vicinity-peach/40 mt-1 uppercase tracking-widest font-black">Refresh all {systemData?.stats?.activeDataSources || 0} active data sources.</p>
             </div>
             <div className="flex flex-col sm:flex-row gap-3 w-full lg:w-auto">
+              <select
+                value={manualSyncMode}
+                onChange={(e) => setManualSyncMode(e.target.value)}
+                disabled={isSyncing}
+                className="bg-[#4a5a67] text-vicinity-peach px-5 py-4 rounded-2xl font-black uppercase tracking-widest text-xs border border-white/10 outline-none disabled:opacity-60"
+              >
+                <option value="ingest_only">Fast Sync</option>
+                <option value="baseline_full_sync">Full Sync</option>
+              </select>
               <button
                 onClick={handleRebuildEmbeddings}
                 disabled={isRebuildingEmbeddings}
@@ -735,7 +754,7 @@ export default function AdminPage() {
                       <tr key={run.id} className="hover:bg-white/5 transition-colors">
                         <td className="px-8 py-5 text-white font-bold">{run.sourceName}</td>
                         <td className="px-8 py-5 text-white/50 font-black uppercase tracking-widest text-[10px]">
-                          {run.notes === "embedding_rebuild" ? "Embedding Rebuild" : "Vimeo Sync"}
+                          {String(run.notes || "").includes("embedding_rebuild") ? "Embedding Rebuild" : "Vimeo Sync"}
                         </td>
                         <td className="px-8 py-5">
                           <span
@@ -755,10 +774,12 @@ export default function AdminPage() {
                         <td className="px-8 py-5 text-white/80 font-bold">{progressText}</td>
                         <td className="px-8 py-5 text-vicinity-peach font-bold">{run.errorCount || 0}</td>
                         <td className="px-8 py-5 text-white/40 font-medium">
-                          {run.createdAt ? new Date(run.createdAt).toLocaleString() : "-"}
+                          {run.startedAt || run.createdAt
+                            ? new Date(run.startedAt || run.createdAt).toLocaleString()
+                            : "-"}
                         </td>
                         <td className="px-8 py-5 text-right">
-                          {run.canRetry && run.notes !== "embedding_rebuild" ? (
+                          {run.canRetry && !String(run.notes || "").includes("embedding_rebuild") ? (
                             <button
                               onClick={() => handleRetryRun(run.id)}
                               disabled={retryingRunId === run.id}

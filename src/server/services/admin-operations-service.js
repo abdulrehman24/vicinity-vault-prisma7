@@ -178,7 +178,7 @@ export class AdminOperationsService {
           trigger: sync_run_trigger.manual,
           status: sync_run_status.running,
           started_at: new Date(),
-          notes: "embedding_rebuild"
+          notes: "embedding_rebuild,enrichment_async"
         }
       });
 

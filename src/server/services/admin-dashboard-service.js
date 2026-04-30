@@ -1,4 +1,4 @@
-import { source_status } from "@prisma/client";
+import { source_status, sync_run_status, sync_run_video_status } from "@prisma/client";
 import { SystemHealthService } from "./system-health-service";
 
 export class AdminDashboardService {
@@ -25,6 +25,7 @@ export class AdminDashboardService {
           videos_created: true,
           videos_updated: true,
           embeddings_created: true,
+          started_at: true,
           created_at: true,
           finished_at: true,
           error_count: true,
@@ -32,6 +33,29 @@ export class AdminDashboardService {
         }
       })
     ]);
+
+    const runningRunIds = recentRuns.filter((run) => run.status === sync_run_status.running).map((run) => run.id);
+    const processedByRunId = new Map();
+
+    if (runningRunIds.length > 0) {
+      const grouped = await this.prisma.sync_run_videos.groupBy({
+        by: ["sync_run_id", "status"],
+        where: {
+          sync_run_id: { in: runningRunIds }
+        },
+        _count: {
+          _all: true
+        }
+      });
+
+      for (const row of grouped) {
+        if (![sync_run_video_status.success, sync_run_video_status.failed, sync_run_video_status.skipped].includes(row.status)) {
+          continue;
+        }
+        const current = processedByRunId.get(row.sync_run_id) || 0;
+        processedByRunId.set(row.sync_run_id, current + row._count._all);
+      }
+    }
 
     const health = await new SystemHealthService({ prisma: this.prisma }).getHealthSummary();
 
@@ -49,16 +73,145 @@ export class AdminDashboardService {
         trigger: run.trigger,
         notes: run.notes,
         retryOfRunId: run.retry_of_run_id,
+        startedAt: run.started_at,
         createdAt: run.created_at,
         finishedAt: run.finished_at,
         errorCount: run.error_count,
         videosScanned: run.videos_scanned,
-        videosProcessed: run.videos_deleted,
+        videosProcessed: processedByRunId.get(run.id) ?? run.videos_deleted,
         videosCreated: run.videos_created,
         videosUpdated: run.videos_updated,
         embeddingsCreated: run.embeddings_created,
         canRetry: ["failed", "partial"].includes(run.status)
       }))
+    };
+  }
+
+  async getSyncSpeedReport({
+    baselineTag = "baseline_full_sync",
+    afterTag = "ingest_only",
+    dataSourceId = null,
+    sampleSize = 3
+  } = {}) {
+    const normalizedSampleSize = Math.max(3, Math.min(Number(sampleSize) || 3, 20));
+    const tagForEmbeddingRebuild = "enrichment_async";
+    const operationWhere = dataSourceId ? { data_source_id: dataSourceId } : {};
+
+    const completedStatuses = ["success", "partial", "failed"];
+    const fetchRuns = async (tag) =>
+      this.prisma.sync_runs.findMany({
+        where: {
+          ...operationWhere,
+          status: { in: completedStatuses },
+          ...(tag === tagForEmbeddingRebuild
+            ? { notes: { contains: "embedding_rebuild" } }
+            : { notes: { equals: tag } })
+        },
+        orderBy: { started_at: "desc" },
+        take: normalizedSampleSize,
+        select: {
+          id: true,
+          data_source_id: true,
+          status: true,
+          notes: true,
+          started_at: true,
+          finished_at: true,
+          videos_scanned: true,
+          videos_deleted: true,
+          error_count: true
+        }
+      });
+
+    const [baselineRunsRaw, afterRunsRaw] = await Promise.all([fetchRuns(baselineTag), fetchRuns(afterTag)]);
+    const allRunIds = Array.from(new Set([...baselineRunsRaw, ...afterRunsRaw].map((run) => run.id)));
+    const processedByRunId = new Map();
+
+    if (allRunIds.length > 0) {
+      const grouped = await this.prisma.sync_run_videos.groupBy({
+        by: ["sync_run_id", "status"],
+        where: { sync_run_id: { in: allRunIds } },
+        _count: { _all: true }
+      });
+
+      for (const row of grouped) {
+        if (![sync_run_video_status.success, sync_run_video_status.failed, sync_run_video_status.skipped].includes(row.status)) {
+          continue;
+        }
+        const current = processedByRunId.get(row.sync_run_id) || 0;
+        processedByRunId.set(row.sync_run_id, current + row._count._all);
+      }
+    }
+
+    const toMetric = (run) => {
+      const start = run.started_at ? new Date(run.started_at) : null;
+      const end = run.finished_at ? new Date(run.finished_at) : null;
+      const durationMinutes =
+        start && end ? Math.max((end.getTime() - start.getTime()) / 60000, 0) : null;
+      const videosProcessed = processedByRunId.get(run.id) ?? Number(run.videos_deleted || 0);
+      const throughput = durationMinutes && durationMinutes > 0 ? videosProcessed / durationMinutes : null;
+
+      return {
+        runId: run.id,
+        dataSourceId: run.data_source_id,
+        status: run.status,
+        runTypeTag: run.notes,
+        startTime: run.started_at,
+        endTime: run.finished_at,
+        durationMinutes,
+        videosTotal: Number(run.videos_scanned || 0),
+        videosProcessed,
+        throughputVideosPerMinute: throughput,
+        errorCount: Number(run.error_count || 0)
+      };
+    };
+
+    const baselineRuns = baselineRunsRaw.map(toMetric).filter((run) => run.durationMinutes !== null);
+    const afterRuns = afterRunsRaw.map(toMetric).filter((run) => run.durationMinutes !== null);
+
+    const median = (values) => {
+      if (!values.length) return null;
+      const sorted = [...values].sort((a, b) => a - b);
+      const mid = Math.floor(sorted.length / 2);
+      return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+    };
+
+    const baselineDurationMedian = median(baselineRuns.map((run) => run.durationMinutes).filter(Number.isFinite));
+    const afterDurationMedian = median(afterRuns.map((run) => run.durationMinutes).filter(Number.isFinite));
+    const baselineThroughputMedian = median(
+      baselineRuns.map((run) => run.throughputVideosPerMinute).filter(Number.isFinite)
+    );
+    const afterThroughputMedian = median(
+      afterRuns.map((run) => run.throughputVideosPerMinute).filter(Number.isFinite)
+    );
+
+    const durationImprovementPct =
+      Number.isFinite(baselineDurationMedian) &&
+      baselineDurationMedian > 0 &&
+      Number.isFinite(afterDurationMedian)
+        ? ((baselineDurationMedian - afterDurationMedian) / baselineDurationMedian) * 100
+        : null;
+    const throughputImprovementPct =
+      Number.isFinite(baselineThroughputMedian) &&
+      baselineThroughputMedian > 0 &&
+      Number.isFinite(afterThroughputMedian)
+        ? ((afterThroughputMedian - baselineThroughputMedian) / baselineThroughputMedian) * 100
+        : null;
+
+    return {
+      baselineTag,
+      afterTag,
+      sampleSize: normalizedSampleSize,
+      enoughData: baselineRuns.length >= 3 && afterRuns.length >= 3,
+      baselineRuns,
+      afterRuns,
+      comparison: {
+        median_duration_before: baselineDurationMedian,
+        median_duration_after: afterDurationMedian,
+        duration_improvement_pct: durationImprovementPct,
+        median_throughput_before: baselineThroughputMedian,
+        median_throughput_after: afterThroughputMedian,
+        throughput_improvement_pct: throughputImprovementPct
+      }
     };
   }
 

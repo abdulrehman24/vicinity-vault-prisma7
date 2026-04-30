@@ -15,6 +15,22 @@ const asFiniteNumber = (value, fallback) => {
   return Number.isFinite(number) ? number : fallback;
 };
 
+const buildStageFlags = (runTypeTag) => {
+  const tag = String(runTypeTag || "baseline_full_sync").trim();
+  if (tag === "ingest_only") {
+    return {
+      enableTranscript: false,
+      enableEmbeddings: false,
+      enableCategorization: false
+    };
+  }
+  return {
+    enableTranscript: true,
+    enableEmbeddings: true,
+    enableCategorization: true
+  };
+};
+
 export class SyncJobService {
   constructor({ prisma, logger = null, workerId = null }) {
     this.prisma = prisma;
@@ -31,6 +47,7 @@ export class SyncJobService {
     dataSourceId = null,
     initiatedByUserId = null,
     trigger = sync_run_trigger.manual,
+    runTypeTag = "baseline_full_sync",
     retryOfRunId = null,
     perPage = 50,
     maxPages = 0,
@@ -49,13 +66,15 @@ export class SyncJobService {
 
     const jobs = [];
     for (const source of sources) {
+      const stageFlags = buildStageFlags(runTypeTag);
       const run = await this.prisma.sync_runs.create({
         data: {
           data_source_id: source.id,
           initiated_by_user_id: initiatedByUserId,
           retry_of_run_id: retryOfRunId,
           trigger,
-          status: sync_run_status.queued
+          status: sync_run_status.queued,
+          notes: String(runTypeTag || "baseline_full_sync")
         }
       });
 
@@ -70,6 +89,8 @@ export class SyncJobService {
             syncRunId: run.id,
             initiatedByUserId,
             trigger,
+            runTypeTag: String(runTypeTag || "baseline_full_sync"),
+            ...stageFlags,
             retryOfRunId,
             perPage: asFiniteNumber(perPage, 50),
             maxPages: asFiniteNumber(maxPages, 0),
@@ -128,6 +149,7 @@ export class SyncJobService {
       dataSourceId: existingRun.data_source_id,
       initiatedByUserId,
       trigger: sync_run_trigger.retry,
+      runTypeTag: "baseline_full_sync",
       retryOfRunId: existingRun.id,
       perPage,
       maxPages,
@@ -222,6 +244,39 @@ export class SyncJobService {
         }
       });
 
+      const runTypeTag = String(job.payload?.runTypeTag || "");
+      if (status === sync_job_status.success && runTypeTag === "ingest_only") {
+        const run = await this.prisma.sync_runs.create({
+          data: {
+            data_source_id: job.data_source_id,
+            initiated_by_user_id: job.payload?.initiatedByUserId || null,
+            trigger: job.payload?.trigger || sync_run_trigger.manual,
+            status: sync_run_status.queued,
+            notes: "enrichment_async"
+          }
+        });
+        await this.prisma.sync_jobs.create({
+          data: {
+            sync_run_id: run.id,
+            data_source_id: job.data_source_id,
+            job_type: sync_job_type.vimeo_sync,
+            status: sync_job_status.queued,
+            payload: {
+              dataSourceId: job.data_source_id,
+              syncRunId: run.id,
+              initiatedByUserId: job.payload?.initiatedByUserId || null,
+              trigger: job.payload?.trigger || sync_run_trigger.manual,
+              runTypeTag: "enrichment_async",
+              mode: "enrich_from_run",
+              parentSyncRunId: job.sync_run_id,
+              enableTranscript: true,
+              enableEmbeddings: true,
+              enableCategorization: true
+            }
+          }
+        });
+      }
+
       return {
         status,
         jobId: job.id,
@@ -244,12 +299,17 @@ export class SyncJobService {
       });
 
       if (job.sync_run_id && !shouldRetry) {
+        const existingRun = await this.prisma.sync_runs.findUnique({
+          where: { id: job.sync_run_id },
+          select: { notes: true }
+        });
         await this.prisma.sync_runs.update({
           where: { id: job.sync_run_id },
           data: {
             status: sync_run_status.failed,
             finished_at: new Date(),
-            notes: error.message || "Sync job failed"
+            // Keep run-type tags stable for reporting; detailed error is in sync_jobs/sync_errors.
+            notes: existingRun?.notes || null
           }
         });
       }
@@ -282,11 +342,29 @@ export class SyncJobService {
       throw new Error("Data source for sync job was not found.");
     }
 
+    if (payload.mode === "enrich_from_run") {
+      return service.runEnrichmentForSyncRun({
+        dataSource,
+        existingSyncRunId: payload.syncRunId || job.sync_run_id,
+        parentSyncRunId: payload.parentSyncRunId,
+        initiatedByUserId: payload.initiatedByUserId || null,
+        trigger: payload.trigger || sync_run_trigger.manual,
+        runTypeTag: payload.runTypeTag || "enrichment_async",
+        enableTranscript: payload.enableTranscript !== false,
+        enableEmbeddings: payload.enableEmbeddings !== false,
+        enableCategorization: payload.enableCategorization !== false
+      });
+    }
+
     return service.runForDataSource({
       dataSource,
       existingSyncRunId: payload.syncRunId || job.sync_run_id,
       initiatedByUserId: payload.initiatedByUserId || null,
       trigger: payload.trigger || sync_run_trigger.manual,
+      runTypeTag: payload.runTypeTag || null,
+      enableTranscript: payload.enableTranscript,
+      enableEmbeddings: payload.enableEmbeddings,
+      enableCategorization: payload.enableCategorization,
       retryOfRunId: payload.retryOfRunId || null,
       perPage: payload.perPage,
       maxPages: payload.maxPages,

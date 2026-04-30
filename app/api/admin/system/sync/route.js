@@ -11,10 +11,17 @@ export async function POST(request) {
     const user = await assertAdminRequest(request, prisma);
     const body = await request.json().catch(() => ({}));
     const service = new SyncJobService({ prisma });
+    const requestedRunTypeTag =
+      typeof body?.runTypeTag === "string" && body.runTypeTag.trim()
+        ? body.runTypeTag.trim()
+        : body?.ingestOnly
+        ? "ingest_only"
+        : "baseline_full_sync";
     const result = await service.enqueueVimeoSync({
       dataSourceId: body?.dataSourceId || null,
       initiatedByUserId: user.id,
       trigger: sync_run_trigger.manual,
+      runTypeTag: requestedRunTypeTag,
       perPage: Number.isFinite(body?.perPage) ? Number(body.perPage) : 50,
       maxPages: Number.isFinite(body?.maxPages) ? Number(body.maxPages) : 0,
       testVideoLimit: Number.isFinite(body?.testVideoLimit) ? Number(body.testVideoLimit) : null

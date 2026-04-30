@@ -239,6 +239,10 @@ export class VideoSyncService {
     existingSyncRunId = null,
     initiatedByUserId = null,
     trigger = sync_run_trigger.manual,
+    runTypeTag = null,
+    enableTranscript = true,
+    enableEmbeddings = true,
+    enableCategorization = true,
     retryOfRunId = null,
     perPage = 50,
     maxPages = 0,
@@ -252,6 +256,7 @@ export class VideoSyncService {
             started_at: new Date(),
             initiated_by_user_id: initiatedByUserId,
             trigger,
+            notes: runTypeTag || undefined,
             retry_of_run_id: retryOfRunId
           }
         })
@@ -269,6 +274,12 @@ export class VideoSyncService {
     runLogger.info("Sync run started", {
       trigger,
       initiatedByUserId: initiatedByUserId || null
+    });
+    runLogger.info("Sync stage flags", {
+      runTypeTag: runTypeTag || null,
+      enableTranscript: Boolean(enableTranscript),
+      enableEmbeddings: Boolean(enableEmbeddings),
+      enableCategorization: Boolean(enableCategorization)
     });
 
     const counters = {
@@ -381,7 +392,7 @@ export class VideoSyncService {
           ? Math.floor(requestedMaxPages)
           : Number.POSITIVE_INFINITY;
       const normalizedPerPage = Math.max(1, Math.floor(Number(perPage) || 50));
-      const configuredTestLimit = Number(process.env.SYNC_TEST_VIDEO_LIMIT || "");
+      const configuredTestLimit = Number(env.syncTestVideoLimit);
       const requestedTestLimit = Number(testVideoLimit);
       const effectiveTestLimit =
         Number.isFinite(requestedTestLimit) && requestedTestLimit > 0
@@ -472,119 +483,133 @@ export class VideoSyncService {
 
           if (canProcessVideo && videoRecord) {
             try {
-              await this.markSyncRunVideo({
-                syncRunId: syncRun.id,
-                dataSourceId: dataSource.id,
-                vimeoVideo,
-                videoId: videoRecord.id,
-                status: sync_run_video_status.running,
-                stage: "fetch_transcript"
-              });
-              runLogger.debug("Transcript processing started", {
-                videoId: videoRecord.id
-              });
-              const transcriptResult = await transcriptService.processVideoTranscript(videoRecord);
-              if (!transcriptResult.skipped) {
-                counters.transcriptsProcessed += 1;
-              }
-              runLogger.info("Transcript processing completed", {
-                videoId: videoRecord.id,
-                source: transcriptResult.source,
-                skipped: transcriptResult.skipped,
-                chunksCount: transcriptResult.chunksCount || 0
-              });
+              let transcriptResult = {
+                transcriptId: null,
+                chunksCount: 0,
+                source: null,
+                skipped: true,
+                reason: "disabled_by_run_type"
+              };
 
-              const tags = vimeoVideo.tags || [];
-              const summary = buildVideoSummary({ video: videoRecord, tags });
-              runLogger.debug("Metadata embedding started", {
-                videoId: videoRecord.id
-              });
-              const metadataEmbedding = await embeddingService.embedVideo({
-                videoId: videoRecord.id,
-                summaryText: summary
-              });
-              if (!metadataEmbedding.skipped) {
-                counters.embeddingsCreated += 1;
-              } else {
-                runLogger.warn("Metadata embedding skipped", {
-                  videoId: videoRecord.id,
-                  reason: metadataEmbedding.reason
-                });
-                await this.recordSyncError({
-                  syncRunId: syncRun.id,
-                  dataSourceId: dataSource.id,
-                  videoId: videoRecord.id,
-                  stage: "embed",
-                  error: new Error(`Skipped metadata embedding: ${metadataEmbedding.reason}`),
-                  payload: { vimeoVideoId: vimeoVideo.vimeoVideoId }
-                });
-              }
-
-              if (transcriptResult.transcriptId) {
+              if (enableTranscript) {
                 await this.markSyncRunVideo({
                   syncRunId: syncRun.id,
                   dataSourceId: dataSource.id,
                   vimeoVideo,
                   videoId: videoRecord.id,
                   status: sync_run_video_status.running,
-                  stage: "embed"
+                  stage: "fetch_transcript"
                 });
-                runLogger.debug("Transcript chunk embedding started", {
+                runLogger.debug("Transcript processing started", {
+                  videoId: videoRecord.id
+                });
+                transcriptResult = await transcriptService.processVideoTranscript(videoRecord);
+                if (!transcriptResult.skipped) {
+                  counters.transcriptsProcessed += 1;
+                }
+                runLogger.info("Transcript processing completed", {
                   videoId: videoRecord.id,
-                  transcriptId: transcriptResult.transcriptId
+                  source: transcriptResult.source,
+                  skipped: transcriptResult.skipped,
+                  chunksCount: transcriptResult.chunksCount || 0
                 });
-                const chunkEmbedding = await embeddingService.embedTranscriptChunks({
-                  transcriptId: transcriptResult.transcriptId
+              }
+
+              const tags = vimeoVideo.tags || [];
+              if (enableEmbeddings) {
+                const summary = buildVideoSummary({ video: videoRecord, tags });
+                runLogger.debug("Metadata embedding started", {
+                  videoId: videoRecord.id
                 });
-                if (!chunkEmbedding.skipped) {
-                  counters.embeddingsCreated += chunkEmbedding.embedded;
-                  runLogger.info("Transcript chunk embeddings completed", {
-                    videoId: videoRecord.id,
-                    transcriptId: transcriptResult.transcriptId,
-                    embedded: chunkEmbedding.embedded
-                  });
+                const metadataEmbedding = await embeddingService.embedVideo({
+                  videoId: videoRecord.id,
+                  summaryText: summary
+                });
+                if (!metadataEmbedding.skipped) {
+                  counters.embeddingsCreated += 1;
                 } else {
-                  runLogger.warn("Transcript chunk embeddings skipped", {
+                  runLogger.warn("Metadata embedding skipped", {
                     videoId: videoRecord.id,
-                    transcriptId: transcriptResult.transcriptId,
-                    reason: chunkEmbedding.reason
+                    reason: metadataEmbedding.reason
                   });
                   await this.recordSyncError({
                     syncRunId: syncRun.id,
                     dataSourceId: dataSource.id,
                     videoId: videoRecord.id,
                     stage: "embed",
-                    error: new Error(`Skipped chunk embeddings: ${chunkEmbedding.reason}`),
-                    payload: { transcriptId: transcriptResult.transcriptId }
+                    error: new Error(`Skipped metadata embedding: ${metadataEmbedding.reason}`),
+                    payload: { vimeoVideoId: vimeoVideo.vimeoVideoId }
                   });
+                }
+
+                if (transcriptResult.transcriptId) {
+                  await this.markSyncRunVideo({
+                    syncRunId: syncRun.id,
+                    dataSourceId: dataSource.id,
+                    vimeoVideo,
+                    videoId: videoRecord.id,
+                    status: sync_run_video_status.running,
+                    stage: "embed"
+                  });
+                  runLogger.debug("Transcript chunk embedding started", {
+                    videoId: videoRecord.id,
+                    transcriptId: transcriptResult.transcriptId
+                  });
+                  const chunkEmbedding = await embeddingService.embedTranscriptChunks({
+                    transcriptId: transcriptResult.transcriptId
+                  });
+                  if (!chunkEmbedding.skipped) {
+                    counters.embeddingsCreated += chunkEmbedding.embedded;
+                    runLogger.info("Transcript chunk embeddings completed", {
+                      videoId: videoRecord.id,
+                      transcriptId: transcriptResult.transcriptId,
+                      embedded: chunkEmbedding.embedded
+                    });
+                  } else {
+                    runLogger.warn("Transcript chunk embeddings skipped", {
+                      videoId: videoRecord.id,
+                      transcriptId: transcriptResult.transcriptId,
+                      reason: chunkEmbedding.reason
+                    });
+                    await this.recordSyncError({
+                      syncRunId: syncRun.id,
+                      dataSourceId: dataSource.id,
+                      videoId: videoRecord.id,
+                      stage: "embed",
+                      error: new Error(`Skipped chunk embeddings: ${chunkEmbedding.reason}`),
+                      payload: { transcriptId: transcriptResult.transcriptId }
+                    });
+                  }
                 }
               }
 
-              const activeTranscript = await this.prisma.transcripts.findFirst({
-                where: {
-                  video_id: videoRecord.id,
-                  is_active: true,
-                  status: "complete"
-                },
-                select: { raw_text: true },
-                orderBy: [{ version: "desc" }, { updated_at: "desc" }]
-              });
-              await this.markSyncRunVideo({
-                syncRunId: syncRun.id,
-                dataSourceId: dataSource.id,
-                vimeoVideo,
-                videoId: videoRecord.id,
-                status: sync_run_video_status.running,
-                stage: "categorize"
-              });
-              await categorizationService.categorizeVideo({
-                videoId: videoRecord.id,
-                title: videoRecord.title,
-                description: videoRecord.description,
-                folderName: videoRecord.folder_name,
-                tags,
-                transcriptText: activeTranscript?.raw_text || ""
-              });
+              if (enableCategorization) {
+                const activeTranscript = await this.prisma.transcripts.findFirst({
+                  where: {
+                    video_id: videoRecord.id,
+                    is_active: true,
+                    status: "complete"
+                  },
+                  select: { raw_text: true },
+                  orderBy: [{ version: "desc" }, { updated_at: "desc" }]
+                });
+                await this.markSyncRunVideo({
+                  syncRunId: syncRun.id,
+                  dataSourceId: dataSource.id,
+                  vimeoVideo,
+                  videoId: videoRecord.id,
+                  status: sync_run_video_status.running,
+                  stage: "categorize"
+                });
+                await categorizationService.categorizeVideo({
+                  videoId: videoRecord.id,
+                  title: videoRecord.title,
+                  description: videoRecord.description,
+                  folderName: videoRecord.folder_name,
+                  tags,
+                  transcriptText: activeTranscript?.raw_text || ""
+                });
+              }
               runLogger.info("Video processing completed", {
                 videoId: videoRecord.id,
                 vimeoVideoId: vimeoVideo.vimeoVideoId
@@ -629,9 +654,12 @@ export class VideoSyncService {
         } finally {
           counters.processed += 1;
           await queueRunProgressFlush();
+          const progressTotal = progressTotalVideos ?? counters.scanned;
+          const progressRemaining = Math.max(progressTotal - counters.processed, 0);
           runLogger.info("Sync run progress updated", {
             processed: counters.processed,
-            total: counters.scanned,
+            total: progressTotal,
+            remaining: progressRemaining,
             created: counters.created,
             updated: counters.updated,
             failed: counters.failed
@@ -780,7 +808,8 @@ export class VideoSyncService {
           transcripts_processed: counters.transcriptsProcessed,
           embeddings_created: counters.embeddingsCreated,
           error_count: counters.failed + 1,
-          notes: error.message
+          // Preserve run-type tag in notes for reporting; detailed failure is stored in sync_errors.
+          notes: syncRun.notes || null
         }
       });
 
@@ -848,5 +877,239 @@ export class VideoSyncService {
       status: results.every((r) => r.status === "success") ? "success" : "partial",
       results
     };
+  }
+
+  async runEnrichmentForSyncRun({
+    dataSource,
+    existingSyncRunId,
+    parentSyncRunId,
+    initiatedByUserId = null,
+    trigger = sync_run_trigger.manual,
+    runTypeTag = "enrichment_async",
+    enableTranscript = true,
+    enableEmbeddings = true,
+    enableCategorization = true
+  }) {
+    if (!parentSyncRunId) {
+      throw new Error("parentSyncRunId is required for enrich_from_run mode.");
+    }
+
+    const syncRun = await this.prisma.sync_runs.update({
+      where: { id: existingSyncRunId },
+      data: {
+        status: sync_run_status.running,
+        started_at: new Date(),
+        initiated_by_user_id: initiatedByUserId,
+        trigger,
+        notes: runTypeTag || "enrichment_async"
+      }
+    });
+    const runLogger = this.logger.child?.({
+      syncRunId: syncRun.id,
+      dataSourceId: dataSource.id,
+      dataSourceName: dataSource.name
+    }) || this.logger;
+
+    const counters = {
+      scanned: 0,
+      processed: 0,
+      created: 0,
+      updated: 0,
+      failed: 0,
+      transcriptsProcessed: 0,
+      embeddingsCreated: 0
+    };
+
+    try {
+      const aiConfigService = new AdminAiConfigService({ prisma: this.prisma });
+      const runtimeAiConfig = await aiConfigService.getRuntimeConfig();
+      const decryptedSourceToken = dataSource.access_token_encrypted ? decryptSecret(dataSource.access_token_encrypted) : null;
+      if (!decryptedSourceToken) {
+        throw new Error(`Source "${dataSource.name}" has no Vimeo access token saved.`);
+      }
+
+      const vimeoClient = new VimeoClient(decryptedSourceToken, runLogger);
+      const openAiService = new OpenAiService({
+        apiKey: runtimeAiConfig.openAiApiKey,
+        embeddingModel: runtimeAiConfig.embeddingModel,
+        transcriptionModel: runtimeAiConfig.transcriptionModel
+      });
+      const transcriptService = new TranscriptService({
+        prisma: this.prisma,
+        vimeoClient,
+        openAiService,
+        logger: runLogger
+      });
+      const embeddingService = new EmbeddingService({
+        prisma: this.prisma,
+        openAiService,
+        logger: runLogger
+      });
+      const categorizationService = new VideoCategorizationService({ prisma: this.prisma, logger: runLogger });
+
+      const parentRunVideos = await this.prisma.sync_run_videos.findMany({
+        where: { sync_run_id: parentSyncRunId },
+        select: {
+          vimeo_video_id: true,
+          payload: true
+        }
+      });
+      counters.scanned = parentRunVideos.length;
+
+      const enrichmentVideos = parentRunVideos.map((row) => ({
+        vimeoVideoId: row.vimeo_video_id,
+        title: row.payload?.title || `Vimeo Video ${row.vimeo_video_id}`,
+        videoUrl: row.payload?.videoUrl || `https://vimeo.com/${row.vimeo_video_id}`,
+        tags: []
+      }));
+
+      await this.queueSyncRunVideos({
+        syncRunId: syncRun.id,
+        dataSourceId: dataSource.id,
+        videos: enrichmentVideos
+      });
+
+      for (const vimeoVideo of enrichmentVideos) {
+        let videoRecord = null;
+        try {
+          await this.markSyncRunVideo({
+            syncRunId: syncRun.id,
+            dataSourceId: dataSource.id,
+            vimeoVideo,
+            status: sync_run_video_status.running,
+            stage: "fetch_transcript",
+            incrementAttempts: true,
+            startedAt: new Date(),
+            finishedAt: null
+          });
+
+          videoRecord = await this.prisma.videos.findUnique({
+            where: { vimeo_video_id: vimeoVideo.vimeoVideoId }
+          });
+          if (!videoRecord) {
+            throw new Error(`Video not found in DB for Vimeo ID ${vimeoVideo.vimeoVideoId}`);
+          }
+          const tagRows = await this.prisma.video_tags.findMany({
+            where: { video_id: videoRecord.id },
+            select: { tag: true }
+          });
+          const tags = tagRows.map((row) => row.tag).filter(Boolean);
+
+          let transcriptResult = { transcriptId: null, skipped: true };
+          if (enableTranscript) {
+            transcriptResult = await transcriptService.processVideoTranscript(videoRecord);
+            if (!transcriptResult.skipped) counters.transcriptsProcessed += 1;
+          }
+
+          if (enableEmbeddings) {
+            const summary = buildVideoSummary({ video: videoRecord, tags });
+            const metadataEmbedding = await embeddingService.embedVideo({
+              videoId: videoRecord.id,
+              summaryText: summary
+            });
+            if (!metadataEmbedding.skipped) counters.embeddingsCreated += 1;
+
+            if (transcriptResult.transcriptId) {
+              const chunkEmbedding = await embeddingService.embedTranscriptChunks({
+                transcriptId: transcriptResult.transcriptId
+              });
+              if (!chunkEmbedding.skipped) counters.embeddingsCreated += chunkEmbedding.embedded;
+            }
+          }
+
+          if (enableCategorization) {
+            const activeTranscript = await this.prisma.transcripts.findFirst({
+              where: {
+                video_id: videoRecord.id,
+                is_active: true,
+                status: "complete"
+              },
+              select: { raw_text: true },
+              orderBy: [{ version: "desc" }, { updated_at: "desc" }]
+            });
+            await categorizationService.categorizeVideo({
+              videoId: videoRecord.id,
+              title: videoRecord.title,
+              description: videoRecord.description,
+              folderName: videoRecord.folder_name,
+              tags,
+              transcriptText: activeTranscript?.raw_text || ""
+            });
+          }
+
+          await this.markSyncRunVideo({
+            syncRunId: syncRun.id,
+            dataSourceId: dataSource.id,
+            vimeoVideo,
+            videoId: videoRecord.id,
+            status: sync_run_video_status.success,
+            stage: "categorize",
+            errorMessage: null,
+            finishedAt: new Date()
+          });
+        } catch (error) {
+          counters.failed += 1;
+          await this.recordSyncError({
+            syncRunId: syncRun.id,
+            dataSourceId: dataSource.id,
+            videoId: videoRecord?.id || null,
+            stage: "fetch_transcript",
+            error,
+            payload: { vimeoVideoId: vimeoVideo.vimeoVideoId, parentSyncRunId }
+          });
+          await this.markSyncRunVideo({
+            syncRunId: syncRun.id,
+            dataSourceId: dataSource.id,
+            vimeoVideo,
+            videoId: videoRecord?.id || undefined,
+            status: sync_run_video_status.failed,
+            stage: "fetch_transcript",
+            errorMessage: error.message,
+            finishedAt: new Date()
+          });
+        } finally {
+          counters.processed += 1;
+        }
+      }
+
+      await this.prisma.sync_runs.update({
+        where: { id: syncRun.id },
+        data: {
+          status: counters.failed > 0 ? sync_run_status.partial : sync_run_status.success,
+          finished_at: new Date(),
+          videos_scanned: counters.scanned,
+          videos_deleted: counters.processed,
+          videos_created: counters.created,
+          videos_updated: counters.updated,
+          transcripts_processed: counters.transcriptsProcessed,
+          embeddings_created: counters.embeddingsCreated,
+          error_count: counters.failed
+        }
+      });
+
+      return {
+        syncRunId: syncRun.id,
+        status: counters.failed > 0 ? "partial" : "success",
+        logFilePath: runLogger.filePath,
+        counters
+      };
+    } catch (error) {
+      await this.prisma.sync_runs.update({
+        where: { id: syncRun.id },
+        data: {
+          status: sync_run_status.failed,
+          finished_at: new Date(),
+          videos_scanned: counters.scanned,
+          videos_deleted: counters.processed,
+          videos_created: counters.created,
+          videos_updated: counters.updated,
+          transcripts_processed: counters.transcriptsProcessed,
+          embeddings_created: counters.embeddingsCreated,
+          error_count: counters.failed + 1,
+          notes: syncRun.notes || "enrichment_async"
+        }
+      });
+      throw error;
+    }
   }
 }
