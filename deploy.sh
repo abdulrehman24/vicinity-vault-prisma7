@@ -8,6 +8,7 @@ SYNC_WORKER_NAME="vimeo-vault-sync-worker"
 LEGACY_SYNC_WORKER_NAME="vimeo-va"
 BRANCH="${1:-main}"
 RUN_NGINX_RELOAD="${RUN_NGINX_RELOAD:-true}"
+SYNC_WORKER_INSTANCES="${SYNC_WORKER_INSTANCES:-1}"
 SYNC_BASE_URL="${SYNC_BASE_URL:-http://127.0.0.1:3000}"
 APP_HEALTH_URL="${APP_HEALTH_URL:-$SYNC_BASE_URL/login}"
 APP_HEALTH_RETRIES="${APP_HEALTH_RETRIES:-30}"
@@ -80,9 +81,16 @@ done
 
 echo "[deploy] Restarting sync worker..."
 if pm2 describe "$SYNC_WORKER_NAME" >/dev/null 2>&1; then
-  INTERNAL_SYNC_TOKEN="$INTERNAL_SYNC_TOKEN" SYNC_BASE_URL="$SYNC_BASE_URL" pm2 restart "$SYNC_WORKER_NAME" --update-env
+  INTERNAL_SYNC_TOKEN="$INTERNAL_SYNC_TOKEN" SYNC_BASE_URL="$SYNC_BASE_URL" SYNC_CONCURRENCY="${SYNC_CONCURRENCY:-}" pm2 restart "$SYNC_WORKER_NAME" --update-env
 else
-  INTERNAL_SYNC_TOKEN="$INTERNAL_SYNC_TOKEN" SYNC_BASE_URL="$SYNC_BASE_URL" pm2 start npm --name "$SYNC_WORKER_NAME" -- run worker:sync
+  INTERNAL_SYNC_TOKEN="$INTERNAL_SYNC_TOKEN" SYNC_BASE_URL="$SYNC_BASE_URL" SYNC_CONCURRENCY="${SYNC_CONCURRENCY:-}" pm2 start npm --name "$SYNC_WORKER_NAME" -- run worker:sync
+fi
+
+if [[ "$SYNC_WORKER_INSTANCES" =~ ^[0-9]+$ ]] && [[ "$SYNC_WORKER_INSTANCES" -ge 1 ]]; then
+  echo "[deploy] Scaling sync workers to $SYNC_WORKER_INSTANCES instance(s)..."
+  pm2 scale "$SYNC_WORKER_NAME" "$SYNC_WORKER_INSTANCES"
+else
+  echo "[deploy] WARN: Invalid SYNC_WORKER_INSTANCES='$SYNC_WORKER_INSTANCES'. Keeping current PM2 scale."
 fi
 
 echo "[deploy] Saving PM2 process list..."
