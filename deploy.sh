@@ -28,9 +28,18 @@ npm ci
 echo "[deploy] Checking environment..."
 npm run check:env:strict
 
+# If INTERNAL_SYNC_TOKEN is not exported in the current shell, try loading from .env.
+if [[ -z "${INTERNAL_SYNC_TOKEN:-}" && -f ".env" ]]; then
+  token_from_env="$(grep -E '^INTERNAL_SYNC_TOKEN=' .env | tail -n 1 | cut -d '=' -f2- | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")"
+  if [[ -n "${token_from_env:-}" ]]; then
+    export INTERNAL_SYNC_TOKEN="$token_from_env"
+    echo "[deploy] Loaded INTERNAL_SYNC_TOKEN from .env"
+  fi
+fi
+
 if [[ -z "${INTERNAL_SYNC_TOKEN:-}" ]]; then
   echo "[deploy] ERROR: INTERNAL_SYNC_TOKEN is required for sync worker authentication."
-  echo "[deploy] Set INTERNAL_SYNC_TOKEN in your shell, PM2 ecosystem, or service env before deploy."
+  echo "[deploy] Set INTERNAL_SYNC_TOKEN in your shell, .env, PM2 ecosystem, or service env before deploy."
   exit 1
 fi
 
