@@ -459,6 +459,7 @@ export class SyncJobService {
 
         const resolvedIds = [];
         const openIds = [];
+        const resolvedVimeoIds = [];
         for (const errorRow of originalErrors) {
           const payloadVimeoId = String(errorRow?.payload?.vimeoVideoId || "").trim();
           const videoVimeoId = String(errorRow?.video?.vimeo_video_id || "").trim();
@@ -466,8 +467,34 @@ export class SyncJobService {
 
           if (targetVimeoId && successfulVimeoIds.has(targetVimeoId) && !failedVimeoIds.has(targetVimeoId)) {
             resolvedIds.push(errorRow.id);
+            resolvedVimeoIds.push(targetVimeoId);
           } else {
             openIds.push(errorRow.id);
+          }
+        }
+
+        const uniqueResolvedVimeoIds = Array.from(new Set(resolvedVimeoIds));
+        if (uniqueResolvedVimeoIds.length > 0) {
+          const videos = await this.prisma.videos.findMany({
+            where: {
+              vimeo_video_id: { in: uniqueResolvedVimeoIds }
+            },
+            select: { id: true }
+          });
+          const resolvedVideoIds = videos.map((video) => video.id);
+          if (resolvedVideoIds.length > 0) {
+            await this.prisma.sync_errors.updateMany({
+              where: {
+                status: sync_error_status.open,
+                data_source_id: job.data_source_id,
+                video_id: { in: resolvedVideoIds }
+              },
+              data: {
+                status: sync_error_status.resolved,
+                resolved_at: new Date(),
+                updated_at: new Date()
+              }
+            });
           }
         }
 
