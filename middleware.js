@@ -16,9 +16,11 @@ const isProtectedApi = (pathname) =>
 
 export default auth(async function middleware(request) {
   const { pathname, search } = request.nextUrl;
-  const token = request.auth || null;
-  const isLoggedIn = Boolean(token?.uid || token?.sub);
-  const isAdmin = token?.role === "admin";
+  const authState = request.auth || null;
+  const authUserId = authState?.user?.id || authState?.uid || authState?.sub || null;
+  const authRole = authState?.user?.role || authState?.role || null;
+  const isLoggedIn = Boolean(authUserId);
+  const isAdmin = authRole === "admin";
   const internalSyncToken = process.env.INTERNAL_SYNC_TOKEN || "";
   const requestInternalToken = request.headers.get(INTERNAL_SYNC_TOKEN_HEADER) || "";
   const hasValidInternalToken =
