@@ -22,6 +22,22 @@ export async function middleware(request) {
       req: request,
       secret: process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET
     });
+    if (!token) {
+      token = await getToken({
+        req: request,
+        secret: process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET,
+        cookieName: "__Secure-authjs.session-token",
+        secureCookie: true
+      });
+    }
+    if (!token) {
+      token = await getToken({
+        req: request,
+        secret: process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET,
+        cookieName: "authjs.session-token",
+        secureCookie: false
+      });
+    }
   } catch (_error) {
     token = null;
   }
