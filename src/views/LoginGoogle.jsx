@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { signIn, useSession } from "next-auth/react";
 import SafeIcon from "@/src/common/SafeIcon";
 import NetflixBackground from "@/src/components/NetflixBackground";
@@ -12,6 +12,7 @@ export default function LoginGoogle() {
   const [hasLocalBypassProvider, setHasLocalBypassProvider] = useState(false);
   const [localBypassPassword, setLocalBypassPassword] = useState("");
   const searchParams = useSearchParams();
+  const router = useRouter();
   const { status, data: session } = useSession();
   const nextUrl = searchParams.get("next") || "/search";
 
@@ -61,7 +62,20 @@ export default function LoginGoogle() {
   const handleLocalBypass = async () => {
     if (!hasLocalBypassProvider || isSubmitting) return;
     setIsSubmitting(true);
-    await signIn("local-bypass", { callbackUrl: nextUrl, password: localBypassPassword });
+    const result = await signIn("local-bypass", {
+      redirect: false,
+      callbackUrl: nextUrl,
+      password: localBypassPassword
+    });
+
+    if (result?.ok) {
+      router.replace(result.url || nextUrl);
+      router.refresh();
+      return;
+    }
+
+    const error = result?.error || "CredentialsSignin";
+    window.location.href = `/login?error=${encodeURIComponent(error)}`;
   };
 
   return (
