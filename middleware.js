@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { getToken } from "next-auth/jwt";
 
 const PROTECTED_PAGES = ["/search", "/featured", "/playlists", "/personal", "/admin"];
 const PROTECTED_API_PREFIXES = ["/api/search", "/api/featured", "/api/playlists", "/api/personal", "/api/nav"];
@@ -14,11 +14,20 @@ const isProtectedApi = (pathname) =>
   pathname.startsWith(ADMIN_API_PREFIX) ||
   PROTECTED_API_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
 
-export default auth(async function middleware(request) {
+export async function middleware(request) {
   const { pathname, search } = request.nextUrl;
-  const authState = request.auth || null;
-  const authUserId = authState?.user?.id || authState?.uid || authState?.sub || null;
-  const authRole = authState?.user?.role || authState?.role || null;
+  let token = null;
+  try {
+    token = await getToken({
+      req: request,
+      secret: process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET
+    });
+  } catch (_error) {
+    token = null;
+  }
+
+  const authUserId = token?.uid || token?.sub || null;
+  const authRole = token?.role || null;
   const isLoggedIn = Boolean(authUserId);
   const isAdmin = authRole === "admin";
   const internalSyncToken = process.env.INTERNAL_SYNC_TOKEN || "";
@@ -62,7 +71,7 @@ export default auth(async function middleware(request) {
   }
 
   return NextResponse.next();
-});
+}
 
 export const config = {
   matcher: [
