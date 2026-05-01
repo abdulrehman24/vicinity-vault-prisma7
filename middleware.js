@@ -18,12 +18,9 @@ export async function middleware(request) {
   const { pathname, search } = request.nextUrl;
   let token = null;
   try {
-    const isProduction = process.env.NODE_ENV === "production";
     token = await getToken({
       req: request,
-      secret: process.env.NEXTAUTH_SECRET,
-      cookieName: isProduction ? "__Secure-authjs.session-token" : "authjs.session-token",
-      secureCookie: isProduction
+      secret: process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET
     });
   } catch (_error) {
     token = null;

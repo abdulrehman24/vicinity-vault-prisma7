@@ -230,8 +230,7 @@ export class VideoSyncService {
       await this.prisma.video_tags.createMany({
         data: uniqueTags.map((tag) => ({
           video_id: video.id,
-          tag,
-          normalized_tag: tag.toLowerCase()
+          tag
         })),
         // Prevent race-condition failures when concurrent workers process the same video.
         skipDuplicates: true
@@ -255,6 +254,7 @@ export class VideoSyncService {
     enableEmbeddings = true,
     enableCategorization = true,
     retryOfRunId = null,
+    targetVimeoVideoIds = null,
     perPage = 50,
     maxPages = 0,
     testVideoLimit = null
@@ -425,6 +425,17 @@ export class VideoSyncService {
       runLogger.info("Video processing workers configured", {
         workerCount
       });
+      const targetedVimeoVideoIds = Array.isArray(targetVimeoVideoIds)
+        ? Array.from(new Set(targetVimeoVideoIds.map((value) => String(value || "").trim()).filter(Boolean)))
+        : [];
+      const targetedVimeoVideoIdSet = new Set(targetedVimeoVideoIds);
+      const remainingTargetedIds = new Set(targetedVimeoVideoIds);
+      if (targetedVimeoVideoIdSet.size > 0) {
+        runLogger.info("Targeted retry mode enabled", {
+          targetCount: targetedVimeoVideoIdSet.size
+        });
+        progressTotalVideos = targetedVimeoVideoIdSet.size;
+      }
 
       const processSingleVideo = async (vimeoVideo) => {
         await this.markSyncRunVideo({
@@ -723,10 +734,43 @@ export class VideoSyncService {
       let hasMore = true;
       let remainingTestLimit = effectiveTestLimit;
 
-      while (hasMore && pagesFetched < maxPageCount) {
+      if (targetedVimeoVideoIdSet.size > 0) {
+        const targetedVideos = [];
+        for (const targetVimeoVideoId of targetedVimeoVideoIds) {
+          try {
+            const video = await vimeoClient.getVideoById(targetVimeoVideoId);
+            targetedVideos.push(video);
+            remainingTargetedIds.delete(String(video?.vimeoVideoId || "").trim());
+          } catch (error) {
+            counters.failed += 1;
+            await this.recordSyncError({
+              syncRunId: syncRun.id,
+              dataSourceId: dataSource.id,
+              stage: "fetch_metadata",
+              error,
+              payload: { vimeoVideoId: targetVimeoVideoId, targetedRetry: true }
+            });
+          }
+        }
+
+        await this.queueSyncRunVideos({
+          syncRunId: syncRun.id,
+          dataSourceId: dataSource.id,
+          videos: targetedVideos
+        });
+        counters.scanned += targetedVideos.length;
+        await queueRunProgressFlush({ force: true });
+        await processVideoBatch({ videos: targetedVideos, page: 1 });
+        hasMore = false;
+      }
+
+      while (targetedVimeoVideoIdSet.size === 0 && hasMore && pagesFetched < maxPageCount) {
         const pageResult = await vimeoClient.listVideosPage({ page: currentPage, perPage });
         const fetchedVideos = pageResult.videos;
-        let videosToProcess = fetchedVideos;
+        let videosToProcess =
+          targetedVimeoVideoIdSet.size > 0
+            ? fetchedVideos.filter((video) => targetedVimeoVideoIdSet.has(String(video?.vimeoVideoId || "").trim()))
+            : fetchedVideos;
 
         if (resumeGuardVimeoId && currentPage === resumeStartPage) {
           const cursorIndex = videosToProcess.findIndex((video) => video.vimeoVideoId === resumeGuardVimeoId);
@@ -793,6 +837,9 @@ export class VideoSyncService {
         await queueRunProgressFlush({ force: true });
 
         await processVideoBatch({ videos: videosToProcess, page: currentPage });
+        for (const processedVideo of videosToProcess) {
+          remainingTargetedIds.delete(String(processedVideo?.vimeoVideoId || "").trim());
+        }
 
         if (videosToProcess.length > 0) {
           const lastProcessedVideo = videosToProcess[videosToProcess.length - 1];
@@ -808,7 +855,7 @@ export class VideoSyncService {
         }
 
         pagesFetched += 1;
-        hasMore = pageResult.hasMore;
+        hasMore = pageResult.hasMore && (targetedVimeoVideoIdSet.size === 0 || remainingTargetedIds.size > 0);
         currentPage += 1;
       }
 
@@ -819,6 +866,24 @@ export class VideoSyncService {
         scanned: counters.scanned,
         processed: counters.processed
       });
+
+      if (targetedVimeoVideoIdSet.size > 0 && remainingTargetedIds.size > 0) {
+        counters.failed += remainingTargetedIds.size;
+        const missingIds = Array.from(remainingTargetedIds);
+        for (const missingVimeoVideoId of missingIds) {
+          await this.recordSyncError({
+            syncRunId: syncRun.id,
+            dataSourceId: dataSource.id,
+            stage: "fetch_metadata",
+            error: new Error(`Targeted retry could not find Vimeo video ${missingVimeoVideoId}`),
+            payload: { vimeoVideoId: missingVimeoVideoId, targetedRetry: true }
+          });
+        }
+        runLogger.warn("Targeted retry could not find all requested videos", {
+          missingCount: missingIds.length,
+          missingVimeoVideoIds: missingIds
+        });
+      }
 
       await queueRunProgressFlush({ force: true });
       await this.prisma.sync_runs.update({

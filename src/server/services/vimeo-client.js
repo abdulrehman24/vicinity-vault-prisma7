@@ -215,6 +215,29 @@ export class VimeoClient {
     return Array.isArray(payload?.data) ? payload.data : [];
   }
 
+  async getVideoById(vimeoVideoId) {
+    const normalizedId = String(vimeoVideoId || "").trim();
+    if (!normalizedId) {
+      throw new Error("Vimeo video id is required.");
+    }
+    const item = await this.request(`/videos/${normalizedId}?fields=${encodeURIComponent(VIDEO_FIELDS)}`);
+    const videoId = extractVideoIdFromUri(item?.uri) || normalizedId;
+    return {
+      vimeoVideoId: videoId,
+      vimeoUri: item?.uri || `/videos/${videoId}`,
+      title: item?.name || `Vimeo Video ${videoId}`,
+      description: item?.description || null,
+      durationSeconds: Number.isFinite(item?.duration) ? item.duration : null,
+      publishedAt: toIsoOrNull(item?.release_time || item?.created_time),
+      thumbnailUrl: pickThumbnail(item?.pictures),
+      videoUrl: item?.link || `https://vimeo.com/${videoId}`,
+      folderName: item?.parent_folder?.name || null,
+      privacyView: item?.privacy?.view || null,
+      tags: parseTags(item?.tags),
+      raw: item
+    };
+  }
+
   async fetchTextTrackContent(link) {
     const response = await fetch(link, {
       headers: {

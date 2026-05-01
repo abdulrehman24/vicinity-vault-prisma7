@@ -10,18 +10,27 @@ export async function POST(request) {
     const user = await assertAdminRequest(request, prisma);
     const body = await request.json().catch(() => ({}));
     const syncRunId = String(body?.syncRunId || "").trim();
-    if (!syncRunId) {
-      return NextResponse.json({ error: "syncRunId is required." }, { status: 400 });
+    const syncErrorId = String(body?.syncErrorId || "").trim();
+    if (!syncRunId && !syncErrorId) {
+      return NextResponse.json({ error: "syncRunId or syncErrorId is required." }, { status: 400 });
     }
 
     const service = new SyncJobService({ prisma });
-    const result = await service.enqueueRetryRun({
-      syncRunId,
+    const commonPayload = {
       initiatedByUserId: user.id,
       perPage: Number.isFinite(body?.perPage) ? Number(body.perPage) : 50,
       maxPages: Number.isFinite(body?.maxPages) ? Number(body.maxPages) : 0,
       testVideoLimit: Number.isFinite(body?.testVideoLimit) ? Number(body.testVideoLimit) : null
-    });
+    };
+    const result = syncErrorId
+      ? await service.enqueueRetryError({
+          syncErrorId,
+          ...commonPayload
+        })
+      : await service.enqueueRetryRun({
+          syncRunId,
+          ...commonPayload
+        });
     if (result.status === "accepted") {
       service.processNextJob().catch(() => {});
     }

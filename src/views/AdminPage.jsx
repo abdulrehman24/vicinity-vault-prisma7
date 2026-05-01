@@ -50,6 +50,7 @@ export default function AdminPage() {
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
   const [syncErrorFilter, setSyncErrorFilter] = useState("open");
   const [errorActionId, setErrorActionId] = useState(null);
+  const [isRetryingAllErrors, setIsRetryingAllErrors] = useState(false);
   const [sources, setSources] = useState([]);
   const [users, setUsers] = useState([]);
   const [genres, setGenres] = useState([]);
@@ -311,15 +312,16 @@ export default function AdminPage() {
     }
   };
 
-  const handleRetryRun = async (syncRunId) => {
+  const handleRetryRun = async ({ syncRunId = null, syncErrorId = null } = {}) => {
     try {
-      if (!syncRunId) return;
+      const retryTargetId = syncErrorId || syncRunId;
+      if (!retryTargetId) return;
       resetMessages();
-      setRetryingRunId(syncRunId);
+      setRetryingRunId(retryTargetId);
       toast.message("Retry sync queued");
       await apiFetch("/api/admin/system/retry", {
         method: "POST",
-        body: JSON.stringify({ syncRunId })
+        body: JSON.stringify(syncErrorId ? { syncErrorId } : { syncRunId })
       });
       setPageSuccess("Retry sync queued.");
       toast.success("Retry sync queued");
@@ -330,6 +332,33 @@ export default function AdminPage() {
       toast.error(error.message || "Retry sync failed");
     } finally {
       setRetryingRunId(null);
+    }
+  };
+
+  const handleRetryAllErrors = async () => {
+    try {
+      resetMessages();
+      setIsRetryingAllErrors(true);
+      toast.message("Retrying all open sync errors...");
+      const result = await apiFetch("/api/admin/system/errors", {
+        method: "POST",
+        body: JSON.stringify({ action: "retry_all" })
+      });
+
+      if (result.status === "accepted") {
+        setPageSuccess("Retry-all queued for open sync errors.");
+        toast.success("Retry-all queued");
+      } else {
+        setPageError(result.reason || "No open errors to retry.");
+        toast.error(result.reason || "No open errors to retry.");
+      }
+
+      await Promise.all([loadSystem(), loadSyncErrors(syncErrorFilter)]);
+    } catch (error) {
+      setPageError(error.message);
+      toast.error(error.message || "Retry-all failed");
+    } finally {
+      setIsRetryingAllErrors(false);
     }
   };
 
@@ -797,11 +826,11 @@ export default function AdminPage() {
                         <td className="px-8 py-5 text-right">
                           {run.canRetry && !String(run.notes || "").includes("embedding_rebuild") ? (
                             <button
-                              onClick={() => handleRetryRun(run.id)}
+                              onClick={() => handleRetryRun({ syncRunId: run.id })}
                               disabled={retryingRunId === run.id}
                               className="px-4 py-2 rounded-xl bg-[#4a5a67] text-vicinity-peach hover:bg-[#526472] text-[10px] font-black uppercase tracking-widest disabled:opacity-60"
                             >
-                              {retryingRunId === run.id ? "Retrying..." : "Retry"}
+                              {retryingRunId === run.id ? "Retrying..." : "Retry Full Run"}
                             </button>
                           ) : (
                             <span className="text-white/20 text-[10px] font-black uppercase tracking-widest">-</span>
@@ -831,6 +860,13 @@ export default function AdminPage() {
                 </p>
               </div>
               <div className="flex items-center gap-2">
+                <button
+                  onClick={handleRetryAllErrors}
+                  disabled={syncErrorFilter !== "open" || isRetryingAllErrors || syncErrors.length === 0}
+                  className="px-4 py-2 rounded-xl bg-blue-500/20 text-blue-200 text-[10px] font-black uppercase tracking-widest disabled:opacity-40"
+                >
+                  {isRetryingAllErrors ? "Retrying All..." : "Retry All"}
+                </button>
                 {[
                   { id: "open", label: "Open" },
                   { id: "retrying", label: "Retrying" },
@@ -888,15 +924,15 @@ export default function AdminPage() {
                       <td className="px-8 py-5 text-right">
                         <div className="flex justify-end gap-2">
                           <button
-                            onClick={() => handleRetryRun(row.syncRunId)}
+                            onClick={() => handleRetryRun({ syncErrorId: row.id })}
                             disabled={
-                              !row.syncRunId ||
+                              !row.id ||
                               row.status === "retrying" ||
-                              retryingRunId === row.syncRunId
+                              retryingRunId === row.id
                             }
                             className="px-3 py-2 rounded-xl bg-blue-500/20 text-blue-200 text-[10px] font-black uppercase tracking-widest disabled:opacity-40"
                           >
-                            {retryingRunId === row.syncRunId ? "Retrying..." : "Retry"}
+                            {retryingRunId === row.id ? "Retrying..." : "Retry"}
                           </button>
                           <button
                             onClick={() => handleSyncErrorStatus(row.id, "resolved")}

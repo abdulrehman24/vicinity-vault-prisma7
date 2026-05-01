@@ -50,6 +50,9 @@ export class SyncJobService {
     runTypeTag = "baseline_full_sync",
     resetCursor = false,
     retryOfRunId = null,
+    retryErrorId = null,
+    retryErrorIds = null,
+    targetVimeoVideoIds = null,
     perPage = 50,
     maxPages = 0,
     testVideoLimit = null
@@ -94,6 +97,13 @@ export class SyncJobService {
             ...stageFlags,
             resetCursor: Boolean(resetCursor),
             retryOfRunId,
+            retryErrorId,
+            retryErrorIds: Array.isArray(retryErrorIds)
+              ? Array.from(new Set(retryErrorIds.map((value) => String(value || "").trim()).filter(Boolean)))
+              : null,
+            targetVimeoVideoIds: Array.isArray(targetVimeoVideoIds)
+              ? Array.from(new Set(targetVimeoVideoIds.map((value) => String(value || "").trim()).filter(Boolean)))
+              : null,
             perPage: asFiniteNumber(perPage, 50),
             maxPages: asFiniteNumber(maxPages, 0),
             testVideoLimit: testVideoLimit === null ? null : asFiniteNumber(testVideoLimit, null)
@@ -158,6 +168,159 @@ export class SyncJobService {
       maxPages,
       testVideoLimit
     });
+  }
+
+  async enqueueRetryError({ syncErrorId, initiatedByUserId = null, perPage = 50, maxPages = 0, testVideoLimit = null }) {
+    const syncError = await this.prisma.sync_errors.findUnique({
+      where: { id: syncErrorId },
+      select: {
+        id: true,
+        sync_run_id: true,
+        data_source_id: true,
+        status: true,
+        stage: true,
+        payload: true,
+        video: {
+          select: {
+            vimeo_video_id: true
+          }
+        }
+      }
+    });
+
+    if (!syncError) {
+      throw new Error("Sync error not found.");
+    }
+
+    if (syncError.status === sync_error_status.resolved || syncError.status === sync_error_status.ignored) {
+      throw new Error("Only open or retrying sync errors can be retried.");
+    }
+
+    const payloadVimeoId = String(syncError?.payload?.vimeoVideoId || "").trim();
+    const videoVimeoId = String(syncError?.video?.vimeo_video_id || "").trim();
+    const targetVimeoVideoId = payloadVimeoId || videoVimeoId;
+    if (!targetVimeoVideoId) {
+      throw new Error("This sync error is missing a Vimeo video id and cannot be retried individually.");
+    }
+
+    await this.prisma.sync_errors.update({
+      where: { id: syncError.id },
+      data: {
+        status: sync_error_status.retrying,
+        retry_count: { increment: 1 },
+        next_retry_at: null,
+        updated_at: new Date()
+      }
+    });
+
+    return this.enqueueVimeoSync({
+      dataSourceId: syncError.data_source_id,
+      initiatedByUserId,
+      trigger: sync_run_trigger.retry,
+      runTypeTag: "retry_single_error",
+      resetCursor: false,
+      retryOfRunId: syncError.sync_run_id,
+      retryErrorId: syncError.id,
+      retryErrorIds: [syncError.id],
+      targetVimeoVideoIds: [targetVimeoVideoId],
+      perPage,
+      maxPages,
+      testVideoLimit
+    });
+  }
+
+  async enqueueRetryAllErrors({ initiatedByUserId = null, perPage = 50, maxPages = 0, testVideoLimit = null } = {}) {
+    const errors = await this.prisma.sync_errors.findMany({
+      where: {
+        status: sync_error_status.open
+      },
+      orderBy: [{ created_at: "asc" }],
+      select: {
+        id: true,
+        sync_run_id: true,
+        data_source_id: true,
+        payload: true,
+        video: {
+          select: {
+            vimeo_video_id: true
+          }
+        }
+      }
+    });
+
+    if (!errors.length) {
+      return {
+        status: "skipped",
+        reason: "No open sync errors to retry.",
+        jobs: []
+      };
+    }
+
+    const groups = new Map();
+    for (const item of errors) {
+      const payloadVimeoId = String(item?.payload?.vimeoVideoId || "").trim();
+      const videoVimeoId = String(item?.video?.vimeo_video_id || "").trim();
+      const targetVimeoVideoId = payloadVimeoId || videoVimeoId;
+      if (!targetVimeoVideoId) continue;
+
+      const groupKey = String(item.data_source_id);
+      const existing = groups.get(groupKey) || {
+        dataSourceId: item.data_source_id,
+        retryOfRunId: item.sync_run_id || null,
+        targetVimeoVideoIds: new Set(),
+        retryErrorIds: new Set()
+      };
+      existing.targetVimeoVideoIds.add(targetVimeoVideoId);
+      existing.retryErrorIds.add(item.id);
+      groups.set(groupKey, existing);
+    }
+
+    const validGroups = Array.from(groups.values()).filter((group) => group.targetVimeoVideoIds.size > 0);
+    if (!validGroups.length) {
+      return {
+        status: "skipped",
+        reason: "Open sync errors did not contain retryable Vimeo video ids.",
+        jobs: []
+      };
+    }
+
+    const retryErrorIds = validGroups.flatMap((group) => Array.from(group.retryErrorIds));
+    await this.prisma.sync_errors.updateMany({
+      where: {
+        id: { in: retryErrorIds }
+      },
+      data: {
+        status: sync_error_status.retrying,
+        retry_count: { increment: 1 },
+        next_retry_at: null,
+        updated_at: new Date()
+      }
+    });
+
+    const jobs = [];
+    for (const group of validGroups) {
+      const queued = await this.enqueueVimeoSync({
+        dataSourceId: group.dataSourceId,
+        initiatedByUserId,
+        trigger: sync_run_trigger.retry,
+        runTypeTag: "retry_all_errors",
+        resetCursor: false,
+        retryOfRunId: group.retryOfRunId,
+        retryErrorIds: Array.from(group.retryErrorIds),
+        targetVimeoVideoIds: Array.from(group.targetVimeoVideoIds),
+        perPage,
+        maxPages,
+        testVideoLimit
+      });
+      if (Array.isArray(queued.jobs)) {
+        jobs.push(...queued.jobs);
+      }
+    }
+
+    return {
+      status: jobs.length > 0 ? "accepted" : "skipped",
+      jobs
+    };
   }
 
   async recoverStaleJobs({ staleAfterMs = DEFAULT_STALE_LOCK_MS } = {}) {
@@ -246,6 +409,28 @@ export class SyncJobService {
           updated_at: new Date()
         }
       });
+
+      const retryErrorIds = Array.from(
+        new Set(
+          [
+            String(job.payload?.retryErrorId || "").trim(),
+            ...(Array.isArray(job.payload?.retryErrorIds)
+              ? job.payload.retryErrorIds.map((value) => String(value || "").trim())
+              : [])
+          ].filter(Boolean)
+        )
+      );
+      if (retryErrorIds.length > 0) {
+        const retrySucceeded = status === sync_job_status.success;
+        await this.prisma.sync_errors.updateMany({
+          where: { id: { in: retryErrorIds } },
+          data: {
+            status: retrySucceeded ? sync_error_status.resolved : sync_error_status.open,
+            resolved_at: retrySucceeded ? new Date() : null,
+            updated_at: new Date()
+          }
+        });
+      }
 
       const runTypeTag = String(job.payload?.runTypeTag || "");
       if (status === sync_job_status.success && runTypeTag === "ingest_only") {
@@ -370,6 +555,7 @@ export class SyncJobService {
       enableEmbeddings: payload.enableEmbeddings,
       enableCategorization: payload.enableCategorization,
       retryOfRunId: payload.retryOfRunId || null,
+      targetVimeoVideoIds: Array.isArray(payload.targetVimeoVideoIds) ? payload.targetVimeoVideoIds : null,
       perPage: payload.perPage,
       maxPages: payload.maxPages,
       testVideoLimit: payload.testVideoLimit
