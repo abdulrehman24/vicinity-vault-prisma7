@@ -1,7 +1,7 @@
 import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
 import Credentials from "next-auth/providers/credentials";
-import crypto from "node:crypto";
+import crypto from "crypto";
 import { prisma } from "@/src/server/db/prisma";
 import { user_role } from "@prisma/client";
 
