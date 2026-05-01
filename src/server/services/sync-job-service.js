@@ -421,15 +421,76 @@ export class SyncJobService {
         )
       );
       if (retryErrorIds.length > 0) {
-        const retrySucceeded = status === sync_job_status.success;
-        await this.prisma.sync_errors.updateMany({
+        const originalErrors = await this.prisma.sync_errors.findMany({
           where: { id: { in: retryErrorIds } },
-          data: {
-            status: retrySucceeded ? sync_error_status.resolved : sync_error_status.open,
-            resolved_at: retrySucceeded ? new Date() : null,
-            updated_at: new Date()
+          select: {
+            id: true,
+            payload: true,
+            video: {
+              select: {
+                vimeo_video_id: true
+              }
+            }
           }
         });
+
+        const runVideoRows = await this.prisma.sync_run_videos.findMany({
+          where: {
+            sync_run_id: job.sync_run_id
+          },
+          select: {
+            vimeo_video_id: true,
+            status: true
+          }
+        });
+
+        const failedVimeoIds = new Set(
+          runVideoRows
+            .filter((row) => row.status === "failed")
+            .map((row) => String(row.vimeo_video_id || "").trim())
+            .filter(Boolean)
+        );
+        const successfulVimeoIds = new Set(
+          runVideoRows
+            .filter((row) => row.status === "success")
+            .map((row) => String(row.vimeo_video_id || "").trim())
+            .filter(Boolean)
+        );
+
+        const resolvedIds = [];
+        const openIds = [];
+        for (const errorRow of originalErrors) {
+          const payloadVimeoId = String(errorRow?.payload?.vimeoVideoId || "").trim();
+          const videoVimeoId = String(errorRow?.video?.vimeo_video_id || "").trim();
+          const targetVimeoId = payloadVimeoId || videoVimeoId;
+
+          if (targetVimeoId && successfulVimeoIds.has(targetVimeoId) && !failedVimeoIds.has(targetVimeoId)) {
+            resolvedIds.push(errorRow.id);
+          } else {
+            openIds.push(errorRow.id);
+          }
+        }
+
+        if (resolvedIds.length > 0) {
+          await this.prisma.sync_errors.updateMany({
+            where: { id: { in: resolvedIds } },
+            data: {
+              status: sync_error_status.resolved,
+              resolved_at: new Date(),
+              updated_at: new Date()
+            }
+          });
+        }
+        if (openIds.length > 0) {
+          await this.prisma.sync_errors.updateMany({
+            where: { id: { in: openIds } },
+            data: {
+              status: sync_error_status.open,
+              resolved_at: null,
+              updated_at: new Date()
+            }
+          });
+        }
       }
 
       const runTypeTag = String(job.payload?.runTypeTag || "");

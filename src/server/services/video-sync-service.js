@@ -715,14 +715,14 @@ export class VideoSyncService {
 
       const resumeEnabled =
         env.syncResumeEnabled &&
-        runTypeTag === "ingest_only" &&
+        targetedVimeoVideoIdSet.size === 0 &&
         !resetCursor &&
         Number.isFinite(Number(dataSource.sync_cursor_page)) &&
         Number(dataSource.sync_cursor_page) > 0;
       const resumeStartPage = resumeEnabled ? Math.floor(Number(dataSource.sync_cursor_page)) : 1;
       let resumeGuardVimeoId = resumeEnabled ? String(dataSource.sync_cursor_vimeo_id || "").trim() : "";
       if (resumeEnabled) {
-        runLogger.info("Resuming fast sync from cursor", {
+        runLogger.info("Resuming sync from cursor", {
           startPage: resumeStartPage,
           lastVimeoVideoId: resumeGuardVimeoId || null,
           cursorUpdatedAt: dataSource.sync_cursor_updated_at || null
