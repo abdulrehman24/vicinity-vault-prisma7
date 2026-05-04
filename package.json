@@ -11,7 +11,8 @@
     "sync:vimeo": "node scripts/sync-vimeo.js",
     "worker:sync": "node scripts/sync-worker.js",
     "check:env": "node scripts/check-env.js",
-    "check:env:strict": "node scripts/check-env.js --strict"
+    "check:env:strict": "node scripts/check-env.js --strict",
+    "test:search": "node --test src/server/services/__tests__/*.test.mjs"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.7.0",

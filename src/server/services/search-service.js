@@ -158,6 +158,8 @@ const NOISE_TERMS = new Set([
   "clips",
   "content",
   "contents",
+  "industry",
+  "sector",
   "related",
   "relate",
   "around",
@@ -248,12 +250,34 @@ const toScoreMap = (rows, idField, scoreField) => {
 const normalizeMetadataScore = (raw) => clamp(raw / 0.9);
 const normalizeTranscriptScore = (raw) => clamp(raw / 0.75);
 const normalizeSemanticScore = (raw) => clamp(raw);
+const DURATION_MINUTE_PART = "(\\d{1,3}(?:\\.\\d{1,2})?)";
 const DURATION_CONSTRAINT_REGEX = {
-  under: /\b(?:under|less than|below|shorter than|max(?:imum)?(?: of)?)\s+(\d{1,3})\s*(?:min|mins|minute|minutes)\b/i,
-  over: /\b(?:over|more than|above|longer than|min(?:imum)?(?: of)?)\s+(\d{1,3})\s*(?:min|mins|minute|minutes)\b/i
+  between: new RegExp(
+    `\\b(?:between\\s+)?${DURATION_MINUTE_PART}\\s*(?:-|to|and)\\s*${DURATION_MINUTE_PART}\\s*(?:min|mins|minute|minutes)\\b`,
+    "i"
+  ),
+  under: new RegExp(
+    `\\b(?:under|less than|below|shorter than|max(?:imum)?(?: of)?)\\s+${DURATION_MINUTE_PART}\\s*(?:min|mins|minute|minutes)\\b`,
+    "i"
+  ),
+  over: new RegExp(
+    `\\b(?:over|more than|above|longer than|min(?:imum)?(?: of)?)\\s+${DURATION_MINUTE_PART}\\s*(?:min|mins|minute|minutes)\\b`,
+    "i"
+  )
 };
 
-const parseDurationConstraint = (query) => {
+export const parseDurationConstraint = (query) => {
+  const betweenMatch = String(query || "").match(DURATION_CONSTRAINT_REGEX.between);
+  if (betweenMatch) {
+    const first = Number(betweenMatch[1]);
+    const second = Number(betweenMatch[2]);
+    if (Number.isFinite(first) && Number.isFinite(second) && first > 0 && second > 0) {
+      const min = Math.min(first, second);
+      const max = Math.max(first, second);
+      return { type: "range", minSeconds: min * 60, maxSeconds: max * 60 };
+    }
+  }
+
   const underMatch = String(query || "").match(DURATION_CONSTRAINT_REGEX.under);
   if (underMatch) {
     const minutes = Number(underMatch[1]);
@@ -297,7 +321,129 @@ const REQUIREMENT_SYNONYMS = {
   ],
   audience: ["corporate", "enterprise", "b2b", "executive", "boardroom"],
   style: ["premium", "luxury", "cinematic", "polished", "elegant", "high-end"],
-  industry: ["healthcare", "medical", "hospital", "pharma", "biotech", "clinical"]
+  industry: ["healthcare", "medical", "hospital", "pharma", "biotech", "clinical", "hospitality", "hotel", "resort", "travel"]
+};
+
+const INTENT_TAXONOMY = {
+  industry: {
+    healthcare: [
+      "healthcare",
+      "medical",
+      "hospital",
+      "doctor",
+      "doctors",
+      "physician",
+      "physicians",
+      "patient",
+      "patients",
+      "clinical",
+      "clinic",
+      "nurse",
+      "nurses",
+      "pharma",
+      "biotech",
+      "symposium"
+    ],
+    hospitality: [
+      "hospitality",
+      "hotel",
+      "hotels",
+      "resort",
+      "resorts",
+      "tourism",
+      "travel",
+      "guest",
+      "guests",
+      "intercontinental"
+    ]
+  },
+  format: {
+    testimonial: ["testimonial", "testimonials", "client story", "customer story"],
+    brand: ["brand video", "brand film", "brand", "company profile"],
+    case_study: ["case study", "case-study", "success story"],
+    interview: ["interview", "interviews", "talking head"],
+    highlights: ["highlight", "highlights", "recap"]
+  },
+  audience: {
+    corporate: ["corporate", "enterprise", "b2b", "executive", "boardroom"]
+  },
+  style: {
+    cinematic: ["cinematic", "premium", "luxury", "polished", "elegant", "high-end"]
+  }
+};
+
+const EXACT_PHRASE_INTENTS = [
+  "brand video",
+  "brand film",
+  "case study",
+  "client story",
+  "customer story",
+  "company profile",
+  "talking head"
+];
+
+const INDUSTRY_INTENT_ALIASES = {
+  healthcare: [
+    "healthcare",
+    "medical",
+    "hospital",
+    "doctor",
+    "doctors",
+    "physician",
+    "physicians",
+    "patient",
+    "patients",
+    "clinical",
+    "clinic",
+    "nurse",
+    "nurses",
+    "pharma",
+    "biotech",
+    "symposium"
+  ],
+  hospitality: ["hospitality", "hotel", "hotels", "resort", "resorts", "tourism", "travel", "guest", "guests", "intercontinental"]
+};
+
+const INDUSTRY_TERM_TO_INTENT = Object.entries(INDUSTRY_INTENT_ALIASES).reduce((acc, [intent, aliases]) => {
+  for (const alias of aliases) {
+    acc[alias] = intent;
+  }
+  return acc;
+}, {});
+
+const escapeRegExp = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const containsTerm = (text, term) => {
+  if (!text || !term) return false;
+  if (term.includes(" ")) {
+    const pattern = new RegExp(`(?:^|\\s)${escapeRegExp(term)}(?:$|\\s)`, "i");
+    return pattern.test(text);
+  }
+  const pattern = new RegExp(`\\b${escapeRegExp(term)}\\b`, "i");
+  return pattern.test(text);
+};
+
+const canonicalizeIntentGroup = (queryText, groupMap) => {
+  const canonical = new Set();
+  for (const [name, aliases] of Object.entries(groupMap)) {
+    if (aliases.some((alias) => containsTerm(queryText, alias))) {
+      canonical.add(name);
+    }
+  }
+  return Array.from(canonical);
+};
+
+export const extractQueryIntent = (query) => {
+  const lower = normalizeLower(query);
+  if (!lower) {
+    return { industries: [], formats: [], audiences: [], styles: [] };
+  }
+
+  return {
+    industries: canonicalizeIntentGroup(lower, INTENT_TAXONOMY.industry),
+    formats: canonicalizeIntentGroup(lower, INTENT_TAXONOMY.format),
+    audiences: canonicalizeIntentGroup(lower, INTENT_TAXONOMY.audience),
+    styles: canonicalizeIntentGroup(lower, INTENT_TAXONOMY.style)
+  };
 };
 
 const extractStructuredRequirements = (query) => {
@@ -326,6 +472,60 @@ const buildVideoTextCorpus = (video) => {
   return normalizeLower([title, description, folderName, tags, categories].join(" "));
 };
 
+export const inferVideoIntent = (video) => {
+  const corpus = buildVideoTextCorpus(video);
+  return {
+    industries: canonicalizeIntentGroup(corpus, INTENT_TAXONOMY.industry),
+    formats: canonicalizeIntentGroup(corpus, INTENT_TAXONOMY.format),
+    audiences: canonicalizeIntentGroup(corpus, INTENT_TAXONOMY.audience),
+    styles: canonicalizeIntentGroup(corpus, INTENT_TAXONOMY.style)
+  };
+};
+
+export const computeExactMatchScore = (query, video, requirementTerms = []) => {
+  const queryLower = normalizeLower(query);
+  const title = normalizeLower(video.title || "");
+  const description = normalizeLower(video.description || "");
+  const folder = normalizeLower(video.folder_name || "");
+  const tags = normalizeLower((video.video_tags || []).map((tag) => tag.tag).join(" "));
+  const categories = normalizeLower(
+    (video.video_categories || [])
+      .map((item) => item.category?.name || item.category?.slug || "")
+      .join(" ")
+  );
+  const corpus = `${title} ${description} ${folder} ${tags} ${categories}`.trim();
+
+  let score = 0;
+  if (title && queryLower && containsTerm(title, queryLower)) score += 0.5;
+
+  for (const phrase of EXACT_PHRASE_INTENTS) {
+    if (containsTerm(queryLower, phrase)) {
+      if (containsTerm(title, phrase)) score += 0.26;
+      else if (containsTerm(tags, phrase) || containsTerm(categories, phrase)) score += 0.2;
+      else if (containsTerm(corpus, phrase)) score += 0.12;
+    }
+  }
+
+  for (const term of requirementTerms) {
+    if (containsTerm(title, term)) score += 0.08;
+    else if (containsTerm(tags, term) || containsTerm(categories, term)) score += 0.06;
+    else if (containsTerm(corpus, term)) score += 0.03;
+  }
+
+  return clamp(score, 0, 1);
+};
+
+export const computeIntentAlignmentScore = (expected = [], actual = [], { weight = 0.2, mismatchPenalty = 0.2 } = {}) => {
+  if (!expected.length) return 0;
+  const expectedSet = new Set(expected);
+  const actualSet = new Set(actual);
+  const matches = expected.filter((item) => actualSet.has(item)).length;
+  if (matches > 0) {
+    return clamp((matches / expectedSet.size) * weight, 0, weight);
+  }
+  return -Math.abs(mismatchPenalty);
+};
+
 const computeRequirementCoverage = (video, terms, structuredRequirements = []) => {
   const corpus = buildVideoTextCorpus(video);
   let keywordCoverage = 0;
@@ -342,7 +542,20 @@ const computeRequirementCoverage = (video, terms, structuredRequirements = []) =
 
   let structuredMatched = 0;
   for (const requirement of structuredRequirements) {
-    if (requirement.terms.some((term) => corpus.includes(term))) {
+    let isGroupMatched = requirement.terms.some((term) => corpus.includes(term));
+    if (!isGroupMatched && requirement.group === "industry") {
+      const industryIntents = Array.from(
+        new Set(
+          requirement.terms
+            .map((term) => INDUSTRY_TERM_TO_INTENT[term])
+            .filter(Boolean)
+        )
+      );
+      isGroupMatched = industryIntents.some((intent) =>
+        (INDUSTRY_INTENT_ALIASES[intent] || []).some((alias) => corpus.includes(alias))
+      );
+    }
+    if (isGroupMatched) {
       structuredMatched += 1;
     }
   }
@@ -351,10 +564,26 @@ const computeRequirementCoverage = (video, terms, structuredRequirements = []) =
   return clamp(keywordCoverage * 0.55 + structuredCoverage * 0.45);
 };
 
+export const isDurationMatch = (video, constraint) => {
+  if (!constraint) return true;
+  const duration = Number(video.duration_seconds || 0);
+  if (!Number.isFinite(duration) || duration <= 0) return false;
+  if (constraint.type === "range") {
+    return duration >= constraint.minSeconds && duration <= constraint.maxSeconds;
+  }
+  if (constraint.type === "max") {
+    return duration <= constraint.seconds;
+  }
+  return duration >= constraint.seconds;
+};
+
 const scoreDurationMatch = (video, constraint) => {
   if (!constraint) return 0;
   const duration = Number(video.duration_seconds || 0);
   if (!Number.isFinite(duration) || duration <= 0) return -0.08;
+  if (constraint.type === "range") {
+    return duration >= constraint.minSeconds && duration <= constraint.maxSeconds ? 0.12 : -0.2;
+  }
   if (constraint.type === "max") {
     return duration <= constraint.seconds ? 0.1 : -0.18;
   }
@@ -406,6 +635,7 @@ export class SearchService {
     const requirementTerms = buildRequirementTerms(q);
     const structuredRequirements = extractStructuredRequirements(q);
     const durationConstraint = parseDurationConstraint(q);
+    const queryIntent = extractQueryIntent(q);
 
     const metadataRows = await this.prisma.$queryRawUnsafe(
       `
@@ -553,6 +783,18 @@ export class SearchService {
         const metadataScore = normalizeMetadataScore(metadataScoreMap.get(video.id) || (metadataIds.has(video.id) ? 0.25 : 0));
         const transcriptScore = normalizeTranscriptScore(transcriptScoreMap.get(video.id) || (transcriptIds.has(video.id) ? 0.25 : 0));
         const semanticScore = normalizeSemanticScore(semanticVideoScores.get(video.id) || 0);
+        const inferredVideoIntent = inferVideoIntent(video);
+        const exactMatchScore = computeExactMatchScore(q, video, requirementTerms);
+        const industryAlignmentScore = computeIntentAlignmentScore(
+          queryIntent.industries,
+          inferredVideoIntent.industries,
+          { weight: 0.28, mismatchPenalty: 0.22 }
+        );
+        const formatAlignmentScore = computeIntentAlignmentScore(
+          queryIntent.formats,
+          inferredVideoIntent.formats,
+          { weight: 0.2, mismatchPenalty: 0.12 }
+        );
         const requirementCoverageScore = computeRequirementCoverage(
           video,
           requirementTerms,
@@ -560,9 +802,12 @@ export class SearchService {
         );
         const durationScore = scoreDurationMatch(video, durationConstraint);
         const merged =
-          metadataScore * metadataWeight +
+          metadataScore * (metadataWeight + 0.08) +
           transcriptScore * transcriptWeight +
           semanticScore * semanticWeight +
+          exactMatchScore * 0.24 +
+          industryAlignmentScore +
+          formatAlignmentScore +
           requirementCoverageScore * 0.18 +
           durationScore;
 
@@ -571,11 +816,19 @@ export class SearchService {
           metadataScore,
           transcriptScore,
           semanticScore,
+          exactMatchScore,
+          industryAlignmentScore,
+          formatAlignmentScore,
           requirementCoverageScore,
+          rankingDebug: {
+            inferredVideoIntent,
+            queryIntent
+          },
           mergedScore: clamp(merged, 0, 0.99)
         };
       })
       .filter((entry) => {
+        if (durationConstraint && !isDurationMatch(entry.video, durationConstraint)) return false;
         if (entry.mergedScore < minScoreThreshold) return false;
         if (structuredRequirements.length >= 2) {
           return entry.requirementCoverageScore >= 0.35 || entry.semanticScore >= 0.76;
