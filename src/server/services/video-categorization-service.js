@@ -14,6 +14,20 @@ const normalizeText = (value) =>
     .replace(/\s+/g, " ")
     .trim();
 
+const slugify = (value) =>
+  String(value || "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "");
+
+const toDisplayName = (slug) =>
+  String(slug || "")
+    .split("-")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+
 const scoreCategory = (text, keywords = []) => {
   if (!text || !keywords.length) return 0;
   let score = 0;
@@ -51,9 +65,40 @@ export class VideoCategorizationService {
     );
   }
 
-  async categorizeVideo({ videoId, title, description, folderName, tags = [], transcriptText = "" }) {
+  async ensureCategoriesBySlugs(slugs = []) {
+    const normalizedSlugs = Array.from(
+      new Set(
+        (slugs || [])
+          .map((value) => slugify(value))
+          .filter(Boolean)
+      )
+    );
+    if (!normalizedSlugs.length) return;
+
+    for (const slug of normalizedSlugs) {
+      await this.prisma.categories.upsert({
+        where: { slug },
+        update: {},
+        create: {
+          slug,
+          name: toDisplayName(slug) || slug
+        }
+      });
+    }
+  }
+
+  async categorizeVideo({
+    videoId,
+    title,
+    description,
+    folderName,
+    tags = [],
+    transcriptText = "",
+    inferredIndustries = []
+  }) {
     this.logger.debug("Video categorization started", { videoId });
     await this.ensureDefaultCategories();
+    await this.ensureCategoriesBySlugs(inferredIndustries);
 
     const categories = await this.prisma.categories.findMany({
       select: { id: true, slug: true, name: true, description: true }
@@ -76,6 +121,15 @@ export class VideoCategorizationService {
       return { assigned: 0 };
     }
 
+    const explicitIndustrySlugs = Array.from(
+      new Set(
+        (inferredIndustries || [])
+          .map((value) => slugify(value))
+          .filter(Boolean)
+      )
+    );
+    const explicitIndustrySet = new Set(explicitIndustrySlugs);
+
     const ranked = categories
       .map((category) => {
         const fallbackKeys = [
@@ -84,7 +138,10 @@ export class VideoCategorizationService {
           ...(category.description ? [category.description] : [])
         ];
         const configured = DEFAULT_CATEGORY_KEYWORDS[category.slug] || [];
-        const confidence = scoreCategory(corpus, [...configured, ...fallbackKeys]);
+        let confidence = scoreCategory(corpus, [...configured, ...fallbackKeys]);
+        if (explicitIndustrySet.has(category.slug)) {
+          confidence = Math.max(confidence, 0.95);
+        }
         return {
           categoryId: category.id,
           confidence

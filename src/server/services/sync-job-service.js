@@ -21,7 +21,7 @@ const buildStageFlags = (runTypeTag) => {
     return {
       enableTranscript: false,
       enableEmbeddings: false,
-      enableCategorization: false
+      enableCategorization: true
     };
   }
   return {
@@ -520,38 +520,7 @@ export class SyncJobService {
         }
       }
 
-      const runTypeTag = String(job.payload?.runTypeTag || "");
-      if (status === sync_job_status.success && runTypeTag === "ingest_only") {
-        const run = await this.prisma.sync_runs.create({
-          data: {
-            data_source_id: job.data_source_id,
-            initiated_by_user_id: job.payload?.initiatedByUserId || null,
-            trigger: job.payload?.trigger || sync_run_trigger.manual,
-            status: sync_run_status.queued,
-            notes: "enrichment_async"
-          }
-        });
-        await this.prisma.sync_jobs.create({
-          data: {
-            sync_run_id: run.id,
-            data_source_id: job.data_source_id,
-            job_type: sync_job_type.vimeo_sync,
-            status: sync_job_status.queued,
-            payload: {
-              dataSourceId: job.data_source_id,
-              syncRunId: run.id,
-              initiatedByUserId: job.payload?.initiatedByUserId || null,
-              trigger: job.payload?.trigger || sync_run_trigger.manual,
-              runTypeTag: "enrichment_async",
-              mode: "enrich_from_run",
-              parentSyncRunId: job.sync_run_id,
-              enableTranscript: true,
-              enableEmbeddings: true,
-              enableCategorization: true
-            }
-          }
-        });
-      }
+      // Fast Sync (ingest_only) intentionally skips follow-up enrichment to avoid OpenAI-dependent work.
 
       return {
         status,

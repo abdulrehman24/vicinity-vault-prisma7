@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import SafeIcon from "@/src/common/SafeIcon";
 import VideoCard from "@/src/components/VideoCard";
 import VideoModal from "@/src/components/VideoModal";
@@ -9,6 +10,7 @@ import { getJson, notifyDataChanged, sendJson } from "@/src/lib/client-api";
 import { toast } from "sonner";
 
 export default function SearchPage() {
+  const searchParams = useSearchParams();
   const [brief, setBrief] = useState("");
   const [selectedVideo, setSelectedVideo] = useState(null);
   const [hasSearched, setHasSearched] = useState(false);
@@ -36,6 +38,34 @@ export default function SearchPage() {
   useEffect(() => {
     loadCollectionsAndFavorites().catch((err) => setError(err.message));
   }, []);
+
+  useEffect(() => {
+    const q = String(searchParams.get("q") || "").trim();
+    if (!q) return;
+    setBrief(q);
+  }, [searchParams]);
+
+  useEffect(() => {
+    if (!brief.trim()) return;
+    if (!searchParams.get("q")) return;
+    const run = async () => {
+      try {
+        setError("");
+        setHasSearched(true);
+        setIsSearching(true);
+        const payload = await sendJson("/api/search", {
+          method: "POST",
+          body: JSON.stringify({ query: brief, limit: 30 })
+        });
+        setSearchResults(payload.results || []);
+      } catch (err) {
+        setError(err.message);
+      } finally {
+        setIsSearching(false);
+      }
+    };
+    run();
+  }, [brief, searchParams]);
 
   const handleSearch = async (e) => {
     e.preventDefault();

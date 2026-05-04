@@ -90,6 +90,7 @@ export default function AdminPage() {
   const [truncateConfirmOpen, setTruncateConfirmOpen] = useState(false);
   const [isTruncatingData, setIsTruncatingData] = useState(false);
   const [manualSyncMode, setManualSyncMode] = useState("baseline_full_sync");
+  const [sourceSyncStartMode, setSourceSyncStartMode] = useState("cursor");
 
   const apiFetch = async (url, init = {}) => {
     const response = await fetch(url, {
@@ -270,7 +271,8 @@ export default function AdminPage() {
       await apiFetch("/api/admin/system/sync", {
         method: "POST",
         body: JSON.stringify({
-          runTypeTag: manualSyncMode
+          runTypeTag: manualSyncMode,
+          resetCursor: sourceSyncStartMode === "first_page"
         })
       });
       setPageSuccess("Global sync queued.");
@@ -362,8 +364,9 @@ export default function AdminPage() {
     }
   };
 
-  const handleSourceSync = async (sourceId, { resetCursor = false } = {}) => {
+  const handleSourceSync = async (sourceId) => {
     try {
+      const resetCursor = sourceSyncStartMode === "first_page";
       resetMessages();
       setSyncingSourceIds((prev) => (prev.includes(sourceId) ? prev : [...prev, sourceId]));
       setSources((prev) =>
@@ -747,6 +750,32 @@ export default function AdminPage() {
                 <option value="ingest_only">Fast Sync</option>
                 <option value="baseline_full_sync">Full Sync</option>
               </select>
+              <div className="flex items-center gap-4 px-4 py-3 rounded-2xl border border-white/10 bg-[#4a5a67]">
+                <label className="inline-flex items-center gap-2 text-[10px] uppercase tracking-widest font-black text-white/80 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="global-sync-start-mode"
+                    value="cursor"
+                    checked={sourceSyncStartMode === "cursor"}
+                    onChange={() => setSourceSyncStartMode("cursor")}
+                    className="accent-vicinity-peach"
+                    disabled={isSyncing}
+                  />
+                  Cursor page
+                </label>
+                <label className="inline-flex items-center gap-2 text-[10px] uppercase tracking-widest font-black text-white/80 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="global-sync-start-mode"
+                    value="first_page"
+                    checked={sourceSyncStartMode === "first_page"}
+                    onChange={() => setSourceSyncStartMode("first_page")}
+                    className="accent-vicinity-peach"
+                    disabled={isSyncing}
+                  />
+                  First page
+                </label>
+              </div>
               <button
                 onClick={handleRebuildEmbeddings}
                 disabled={isRebuildingEmbeddings}
@@ -1011,11 +1040,10 @@ export default function AdminPage() {
       {activeTab === "sources" && (
         <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
           <div className="flex justify-between items-center">
-            <div className="text-left">
-              <h2 className="text-2xl font-bold text-white tracking-tight">Vimeo Data Sources</h2>
-              <p className="text-[10px] text-vicinity-peach/40 uppercase tracking-widest font-black mt-1">Manage multiple API integrations for the semantic index.</p>
-              <p className="text-[10px] text-white/40 mt-2">Fast Sync resumes from saved cursor. Use "Sync From Start" or "Reset Sync Cursor" to restart from page 1.</p>
-            </div>
+              <div className="text-left">
+                <h2 className="text-2xl font-bold text-white tracking-tight">Vimeo Data Sources</h2>
+                <p className="text-[10px] text-vicinity-peach/40 uppercase tracking-widest font-black mt-1">Manage multiple API integrations for the semantic index.</p>
+              </div>
             <button onClick={() => { setSourceForm({ id: null, name: "", accessToken: "", status: "connected" }); setIsAddingSource(true); }} className="bg-vicinity-peach text-vicinity-slate px-8 py-4 rounded-2xl font-black hover:bg-white transition-all uppercase tracking-widest text-xs flex items-center gap-2">
               <SafeIcon name="Plus" /> Add New Source
             </button>
@@ -1072,22 +1100,22 @@ export default function AdminPage() {
                           >
                             <SafeIcon name={sourceTestId === source.id ? "Loader2" : "ShieldCheck"} className={sourceTestId === source.id ? "animate-spin" : ""} />
                           </button>
-                          <button
-                            onClick={() => handleSourceSync(source.id)}
-                            disabled={isSourceSyncing}
-                            className="p-2 text-white/20 hover:text-vicinity-peach transition-colors disabled:opacity-50"
-                            title="Fast Sync Source"
-                          >
-                            <SafeIcon name="RefreshCw" />
-                          </button>
-                          <button
-                            onClick={() => handleSourceSync(source.id, { resetCursor: true })}
-                            disabled={isSourceSyncing}
-                            className="p-2 text-white/20 hover:text-orange-300 transition-colors disabled:opacity-50"
-                            title="Sync Source From Start"
-                          >
-                            <SafeIcon name="RotateCcw" />
-                          </button>
+                            <button
+                              onClick={() => handleSourceSync(source.id)}
+                              disabled={isSourceSyncing}
+                              className="px-3 py-2 rounded-lg border border-white/10 text-white/70 hover:text-vicinity-peach hover:border-vicinity-peach/40 transition-colors disabled:opacity-50 text-[10px] font-black uppercase tracking-widest"
+                              title={sourceSyncStartMode === "first_page" ? "Fast Sync Source From First Page" : "Fast Sync Source From Cursor"}
+                            >
+                              Fast Sync
+                            </button>
+                            <button
+                              onClick={() => handleResetSourceCursor(source.id)}
+                              disabled={isSourceSyncing}
+                              className="p-2 text-white/20 hover:text-orange-300 transition-colors disabled:opacity-50"
+                              title="Reset Sync Cursor"
+                            >
+                              <SafeIcon name="RotateCcw" />
+                            </button>
                           <button
                             onClick={() => handleResetSourceCursor(source.id)}
                             disabled={isSourceSyncing}

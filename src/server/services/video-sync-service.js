@@ -4,6 +4,7 @@ import { OpenAiService } from "./openai-service";
 import { TranscriptService } from "./transcript-service";
 import { EmbeddingService } from "./embedding-service";
 import { VideoCategorizationService } from "./video-categorization-service";
+import { inferVideoIntent } from "./search-service";
 import { env } from "../config/env";
 import { decryptSecret, encryptSecret } from "../security/secrets";
 import { AdminAiConfigService } from "./admin-ai-config-service";
@@ -623,13 +624,21 @@ export class VideoSyncService {
                   status: sync_run_video_status.running,
                   stage: "categorize"
                 });
+                const inferredIntent = inferVideoIntent({
+                  title: videoRecord.title,
+                  description: videoRecord.description,
+                  folder_name: videoRecord.folder_name,
+                  video_tags: tags.map((tag) => ({ tag })),
+                  video_categories: []
+                });
                 await categorizationService.categorizeVideo({
                   videoId: videoRecord.id,
                   title: videoRecord.title,
                   description: videoRecord.description,
                   folderName: videoRecord.folder_name,
                   tags,
-                  transcriptText: activeTranscript?.raw_text || ""
+                  transcriptText: activeTranscript?.raw_text || "",
+                  inferredIndustries: inferredIntent.industries
                 });
               }
               runLogger.info("Video processing completed", {
@@ -1151,13 +1160,21 @@ export class VideoSyncService {
               select: { raw_text: true },
               orderBy: [{ version: "desc" }, { updated_at: "desc" }]
             });
+            const inferredIntent = inferVideoIntent({
+              title: videoRecord.title,
+              description: videoRecord.description,
+              folder_name: videoRecord.folder_name,
+              video_tags: tags.map((tag) => ({ tag })),
+              video_categories: []
+            });
             await categorizationService.categorizeVideo({
               videoId: videoRecord.id,
               title: videoRecord.title,
               description: videoRecord.description,
               folderName: videoRecord.folder_name,
               tags,
-              transcriptText: activeTranscript?.raw_text || ""
+              transcriptText: activeTranscript?.raw_text || "",
+              inferredIndustries: inferredIntent.industries
             });
           }
 

@@ -51,6 +51,7 @@ export default function Layout({ children, session }) {
 
   const navItems = [
     { path: "/search", label: "Search", icon: "Search" },
+    { path: "/search-history", label: "History", icon: "History" },
     { path: "/featured", label: "Featured", icon: "Star" },
     { path: "/playlists", label: "Team", icon: "Users" },
     { path: "/personal", label: "My Vault", icon: "Lock" }
