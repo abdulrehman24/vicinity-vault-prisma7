@@ -113,9 +113,19 @@ export default function TestVideoPage() {
         {error && <p className="mt-4 text-red-300 text-sm">{error}</p>}
 
         {result && (
-          <pre className="mt-6 p-5 rounded-2xl bg-black/30 border border-white/10 text-vicinity-peach text-xs overflow-auto">
-            {JSON.stringify(result, null, 2)}
-          </pre>
+          <>
+            <div className="mt-4 text-left">
+              <a
+                href={`/admin?tab=videos&search=${encodeURIComponent(result?.vimeoId || value)}`}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-vicinity-peach text-vicinity-slate font-black text-xs uppercase tracking-widest"
+              >
+                Open in Admin Videos
+              </a>
+            </div>
+            <pre className="mt-6 p-5 rounded-2xl bg-black/30 border border-white/10 text-vicinity-peach text-xs overflow-auto">
+              {JSON.stringify(result, null, 2)}
+            </pre>
+          </>
         )}
 
         {aiLoading && (

@@ -54,6 +54,36 @@ export default function AdminPage() {
   const [sources, setSources] = useState([]);
   const [users, setUsers] = useState([]);
   const [genres, setGenres] = useState([]);
+  const [videosData, setVideosData] = useState({
+    items: [],
+    pagination: { page: 1, limit: 25, total: 0, totalPages: 1 },
+    filters: { folders: [], sources: [] }
+  });
+  const [videosQuery, setVideosQuery] = useState({
+    page: 1,
+    limit: 25,
+    search: "",
+    folder: "",
+    sourceId: ""
+  });
+  const [isLoadingVideos, setIsLoadingVideos] = useState(false);
+  const [videoEditor, setVideoEditor] = useState({
+    open: false,
+    loading: false,
+    saving: false,
+    id: null,
+    original: null,
+    form: {
+      title: "",
+      description: "",
+      tags: "",
+      internalNotes: "",
+      classificationOverride: "",
+      searchKeywords: "",
+      manualCategoryOverride: ""
+    }
+  });
+  const [videoUpdateConfirmOpen, setVideoUpdateConfirmOpen] = useState(false);
   const [sourceForm, setSourceForm] = useState({
     id: null,
     name: "",
@@ -91,6 +121,19 @@ export default function AdminPage() {
   const [isTruncatingData, setIsTruncatingData] = useState(false);
   const [manualSyncMode, setManualSyncMode] = useState("baseline_full_sync");
   const [sourceSyncStartMode, setSourceSyncStartMode] = useState("cursor");
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    const tab = url.searchParams.get("tab");
+    const search = url.searchParams.get("search");
+    if (tab && ["system", "sources", "videos", "users", "settings", "genres"].includes(tab)) {
+      setActiveTab(tab);
+    }
+    if (search) {
+      setVideosQuery((prev) => ({ ...prev, search, page: 1 }));
+    }
+  }, []);
 
   const apiFetch = async (url, init = {}) => {
     const response = await fetch(url, {
@@ -174,6 +217,22 @@ export default function AdminPage() {
     setGenres(payload.genres || []);
   };
 
+  const loadVideos = async (query = videosQuery) => {
+    setIsLoadingVideos(true);
+    try {
+      const params = new URLSearchParams();
+      params.set("page", String(query.page || 1));
+      params.set("limit", String(query.limit || 25));
+      if (query.search) params.set("search", query.search);
+      if (query.folder) params.set("folder", query.folder);
+      if (query.sourceId) params.set("sourceId", query.sourceId);
+      const payload = await apiFetch(`/api/admin/videos?${params.toString()}`);
+      setVideosData(payload);
+    } finally {
+      setIsLoadingVideos(false);
+    }
+  };
+
   useEffect(() => {
     const load = async () => {
       try {
@@ -183,6 +242,7 @@ export default function AdminPage() {
         }
         if (activeTab === "sources") await loadSources();
         if (activeTab === "users") await loadUsers();
+        if (activeTab === "videos") await loadVideos();
         if (activeTab === "settings") await loadAiConfig();
         if (activeTab === "genres") await loadGenres();
       } catch (error) {
@@ -191,6 +251,11 @@ export default function AdminPage() {
     };
     load();
   }, [activeTab, syncErrorFilter]);
+
+  useEffect(() => {
+    if (activeTab !== "videos") return;
+    loadVideos(videosQuery).catch((error) => setPageError(error.message));
+  }, [videosQuery, activeTab]);
 
   useEffect(() => {
     if (activeTab !== "system") return;
@@ -522,6 +587,76 @@ export default function AdminPage() {
     setAiConfig((prev) => ({ ...prev, [field]: value }));
   };
 
+  const openVideoEditor = async (videoId) => {
+    try {
+      setVideoEditor((prev) => ({ ...prev, open: true, loading: true, id: videoId }));
+      const payload = await apiFetch(`/api/admin/videos/${videoId}`);
+      const video = payload.video;
+      setVideoEditor({
+        open: true,
+        loading: false,
+        saving: false,
+        id: video.id,
+        original: video,
+        form: {
+          title: video.title || "",
+          description: video.description || "",
+          tags: (video.tags || []).join(", "),
+          internalNotes: video.metadata?.adminLocal?.internalNotes || "",
+          classificationOverride: video.metadata?.adminLocal?.classificationOverride || "",
+          searchKeywords: Array.isArray(video.metadata?.adminLocal?.searchKeywords)
+            ? video.metadata.adminLocal.searchKeywords.join(", ")
+            : "",
+          manualCategoryOverride: video.metadata?.adminLocal?.manualCategoryOverride || ""
+        }
+      });
+    } catch (error) {
+      setPageError(error.message);
+      toast.error(error.message || "Failed to load video");
+      setVideoEditor((prev) => ({ ...prev, open: false, loading: false }));
+    }
+  };
+
+  const submitVideoUpdate = async () => {
+    if (!videoEditor.id) return;
+    try {
+      setVideoEditor((prev) => ({ ...prev, saving: true }));
+      const payload = await apiFetch(`/api/admin/videos/${videoEditor.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          vimeo: {
+            title: videoEditor.form.title,
+            description: videoEditor.form.description,
+            tags: videoEditor.form.tags
+              .split(",")
+              .map((item) => item.trim())
+              .filter(Boolean)
+          },
+          localOnly: {
+            internalNotes: videoEditor.form.internalNotes,
+            classificationOverride: videoEditor.form.classificationOverride,
+            searchKeywords: videoEditor.form.searchKeywords
+              .split(",")
+              .map((item) => item.trim())
+              .filter(Boolean),
+            manualCategoryOverride: videoEditor.form.manualCategoryOverride
+          }
+        })
+      });
+      toast.success("Video metadata updated in Vimeo and Vault");
+      if (payload?.warnings?.length) {
+        toast.error(payload.warnings[0].message || "Update completed with warning");
+      }
+      setVideoEditor((prev) => ({ ...prev, open: false, saving: false }));
+      setVideoUpdateConfirmOpen(false);
+      await loadVideos(videosQuery);
+    } catch (error) {
+      setVideoEditor((prev) => ({ ...prev, saving: false }));
+      setPageError(error.message);
+      toast.error(error.message || "Video update failed");
+    }
+  };
+
   const saveAiConfig = async () => {
     try {
       resetMessages();
@@ -646,6 +781,7 @@ export default function AdminPage() {
             {[
               { id: "system", label: "System", icon: "Settings" },
               { id: "sources", label: "Sources", icon: "Database" },
+              { id: "videos", label: "Videos", icon: "Video" },
               { id: "users", label: "Users", icon: "Users" },
               { id: "settings", label: "AI Config", icon: "Cpu" },
               { id: "genres", label: "Genres", icon: "Tags" }
@@ -1165,6 +1301,138 @@ export default function AdminPage() {
         </div>
       )}
 
+      {activeTab === "videos" && (
+        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+          <div className="bg-[#3d4a55] rounded-[2rem] border border-white/10 p-6">
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+              <input
+                value={videosQuery.search}
+                onChange={(e) => setVideosQuery((prev) => ({ ...prev, search: e.target.value, page: 1 }))}
+                placeholder="Search title / Vimeo ID / tag"
+                className="px-4 py-3 rounded-xl bg-[#4a5a67] border border-white/10 text-white"
+              />
+              <select
+                value={videosQuery.folder}
+                onChange={(e) => setVideosQuery((prev) => ({ ...prev, folder: e.target.value, page: 1 }))}
+                className="px-4 py-3 rounded-xl bg-[#4a5a67] border border-white/10 text-white"
+              >
+                <option value="">All Folders</option>
+                {(videosData.filters?.folders || []).map((folder) => (
+                  <option key={folder} value={folder}>{folder}</option>
+                ))}
+              </select>
+              <select
+                value={videosQuery.sourceId}
+                onChange={(e) => setVideosQuery((prev) => ({ ...prev, sourceId: e.target.value, page: 1 }))}
+                className="px-4 py-3 rounded-xl bg-[#4a5a67] border border-white/10 text-white"
+              >
+                <option value="">All Sources</option>
+                {(videosData.filters?.sources || []).map((source) => (
+                  <option key={source.id} value={source.id}>{source.name}</option>
+                ))}
+              </select>
+              <select
+                value={videosQuery.limit}
+                onChange={(e) => setVideosQuery((prev) => ({ ...prev, limit: Number(e.target.value), page: 1 }))}
+                className="px-4 py-3 rounded-xl bg-[#4a5a67] border border-white/10 text-white"
+              >
+                <option value={25}>25 / page</option>
+                <option value={50}>50 / page</option>
+              </select>
+              <button
+                onClick={() => loadVideos(videosQuery)}
+                className="px-4 py-3 rounded-xl bg-vicinity-peach text-vicinity-slate font-black uppercase text-xs"
+              >
+                {isLoadingVideos ? "Loading..." : "Refresh"}
+              </button>
+            </div>
+          </div>
+
+          <div className="bg-[#3d4a55] rounded-[2rem] border border-white/10 overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-[#323d47] text-vicinity-peach/40 uppercase text-[10px] font-black tracking-[0.2em]">
+                <tr>
+                  <th className="px-4 py-3">Thumb</th>
+                  <th className="px-4 py-3">Title</th>
+                  <th className="px-4 py-3">Vimeo ID</th>
+                  <th className="px-4 py-3">Duration</th>
+                  <th className="px-4 py-3">Published</th>
+                  <th className="px-4 py-3">Folder</th>
+                  <th className="px-4 py-3">Privacy</th>
+                  <th className="px-4 py-3">Tags</th>
+                  <th className="px-4 py-3">Sync</th>
+                  <th className="px-4 py-3">Updated</th>
+                  <th className="px-4 py-3 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {(videosData.items || []).map((video) => (
+                  <tr key={video.id} className="hover:bg-white/5">
+                    <td className="px-4 py-3">
+                      {video.thumbnailUrl ? (
+                        <img src={video.thumbnailUrl} alt={video.title} className="w-24 h-14 object-cover rounded-lg border border-white/10" />
+                      ) : (
+                        <div className="w-24 h-14 rounded-lg bg-black/20 border border-white/10" />
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-white font-semibold max-w-[260px] truncate">{video.title}</td>
+                    <td className="px-4 py-3 text-white/70">{video.vimeoVideoId}</td>
+                    <td className="px-4 py-3 text-white/70">{video.durationSeconds || 0}s</td>
+                    <td className="px-4 py-3 text-white/70">{video.publishedAt ? new Date(video.publishedAt).toLocaleDateString() : "-"}</td>
+                    <td className="px-4 py-3 text-white/70">{video.folderName || "-"}</td>
+                    <td className="px-4 py-3 text-white/70">{video.privacyView || "-"}</td>
+                    <td className="px-4 py-3 text-white/70 max-w-[220px] truncate">{(video.tags || []).join(", ") || "-"}</td>
+                    <td className="px-4 py-3 text-white/70">{video.syncStatus}</td>
+                    <td className="px-4 py-3 text-white/70">{video.updatedAt ? new Date(video.updatedAt).toLocaleString() : "-"}</td>
+                    <td className="px-4 py-3 text-right">
+                      <a href={video.videoUrl} target="_blank" rel="noreferrer" className="text-vicinity-peach mr-3">Open</a>
+                      <button
+                        onClick={() => openVideoEditor(video.id)}
+                        className="px-3 py-2 rounded-lg bg-vicinity-peach text-vicinity-slate font-black text-[10px] uppercase"
+                      >
+                        Edit
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {!isLoadingVideos && (videosData.items || []).length === 0 && (
+                  <tr>
+                    <td colSpan={11} className="px-4 py-8 text-center text-white/50">No videos found.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          <div className="flex items-center justify-between text-white/70 text-sm">
+            <p>
+              Showing page {videosData.pagination?.page || 1} / {videosData.pagination?.totalPages || 1} (
+              {(videosData.pagination?.total || 0).toLocaleString()} videos)
+            </p>
+            <div className="flex gap-2">
+              <button
+                disabled={(videosData.pagination?.page || 1) <= 1}
+                onClick={() => setVideosQuery((prev) => ({ ...prev, page: Math.max(1, prev.page - 1) }))}
+                className="px-3 py-2 rounded-lg bg-white/10 disabled:opacity-50"
+              >
+                Prev
+              </button>
+              <button
+                disabled={(videosData.pagination?.page || 1) >= (videosData.pagination?.totalPages || 1)}
+                onClick={() =>
+                  setVideosQuery((prev) => ({
+                    ...prev,
+                    page: Math.min(videosData.pagination?.totalPages || prev.page, prev.page + 1)
+                  }))
+                }
+                className="px-3 py-2 rounded-lg bg-white/10 disabled:opacity-50"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {activeTab === "users" && (
         <div className="bg-[#3d4a55] rounded-[3rem] border border-white/10 shadow-2xl overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-500">
           <div className="p-10 border-b border-white/5 bg-[#43525e]">
@@ -1424,6 +1692,91 @@ export default function AdminPage() {
         </div>
       )}
 
+      {videoEditor.open && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/90">
+          <div className="bg-[#3d4a55] rounded-[2rem] w-full max-w-3xl border border-white/10">
+            <div className="px-6 py-4 border-b border-white/10 flex items-center justify-between">
+              <div className="text-left">
+                <h3 className="text-xl font-bold text-white">Edit Video Metadata</h3>
+                <p className="text-[11px] text-vicinity-peach/60">Vimeo-synced: title, description, tags. Local-only fields are separate.</p>
+              </div>
+              <button onClick={() => setVideoEditor((prev) => ({ ...prev, open: false }))} className="text-white/60 hover:text-white">
+                <SafeIcon name="X" />
+              </button>
+            </div>
+            {videoEditor.loading ? (
+              <div className="p-8 text-white/70">Loading...</div>
+            ) : (
+              <div className="p-6 space-y-4">
+                <div className="bg-black/20 p-3 rounded-xl text-xs text-vicinity-peach/80 text-left">
+                  This will update both Vault and Vimeo.
+                </div>
+                <input
+                  value={videoEditor.form.title}
+                  onChange={(e) => setVideoEditor((prev) => ({ ...prev, form: { ...prev.form, title: e.target.value } }))}
+                  placeholder="Title (Vimeo-synced)"
+                  className="w-full px-4 py-3 rounded-xl bg-[#4a5a67] border border-white/10 text-white"
+                />
+                <textarea
+                  value={videoEditor.form.description}
+                  onChange={(e) => setVideoEditor((prev) => ({ ...prev, form: { ...prev.form, description: e.target.value } }))}
+                  placeholder="Description (Vimeo-synced)"
+                  className="w-full px-4 py-3 rounded-xl bg-[#4a5a67] border border-white/10 text-white h-28"
+                />
+                <input
+                  value={videoEditor.form.tags}
+                  onChange={(e) => setVideoEditor((prev) => ({ ...prev, form: { ...prev.form, tags: e.target.value } }))}
+                  placeholder="Tags comma separated (Vimeo-synced)"
+                  className="w-full px-4 py-3 rounded-xl bg-[#4a5a67] border border-white/10 text-white"
+                />
+                <div className="pt-2 border-t border-white/10 text-left">
+                  <p className="text-xs text-vicinity-peach/70 font-black uppercase tracking-widest mb-2">Local-only</p>
+                  <input
+                    value={videoEditor.form.internalNotes}
+                    onChange={(e) => setVideoEditor((prev) => ({ ...prev, form: { ...prev.form, internalNotes: e.target.value } }))}
+                    placeholder="Internal notes"
+                    className="w-full mb-2 px-4 py-3 rounded-xl bg-[#4a5a67] border border-white/10 text-white"
+                  />
+                  <input
+                    value={videoEditor.form.classificationOverride}
+                    onChange={(e) => setVideoEditor((prev) => ({ ...prev, form: { ...prev.form, classificationOverride: e.target.value } }))}
+                    placeholder="AI classification override"
+                    className="w-full mb-2 px-4 py-3 rounded-xl bg-[#4a5a67] border border-white/10 text-white"
+                  />
+                  <input
+                    value={videoEditor.form.searchKeywords}
+                    onChange={(e) => setVideoEditor((prev) => ({ ...prev, form: { ...prev.form, searchKeywords: e.target.value } }))}
+                    placeholder="Search keywords comma separated"
+                    className="w-full mb-2 px-4 py-3 rounded-xl bg-[#4a5a67] border border-white/10 text-white"
+                  />
+                  <input
+                    value={videoEditor.form.manualCategoryOverride}
+                    onChange={(e) => setVideoEditor((prev) => ({ ...prev, form: { ...prev.form, manualCategoryOverride: e.target.value } }))}
+                    placeholder="Manual category override"
+                    className="w-full px-4 py-3 rounded-xl bg-[#4a5a67] border border-white/10 text-white"
+                  />
+                </div>
+                <div className="flex justify-end gap-3">
+                  <button
+                    onClick={() => setVideoEditor((prev) => ({ ...prev, open: false }))}
+                    className="px-4 py-2 rounded-xl bg-white/10 text-white"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    disabled={videoEditor.saving}
+                    onClick={() => setVideoUpdateConfirmOpen(true)}
+                    className="px-4 py-2 rounded-xl bg-vicinity-peach text-vicinity-slate font-black"
+                  >
+                    {videoEditor.saving ? "Saving..." : "Save Changes"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <ConfirmDialog
         open={confirmDialog.open}
         title="Delete source?"
@@ -1456,6 +1809,20 @@ export default function AdminPage() {
           if (!genreConfirmDialog.genreId) return;
           deleteGenre(genreConfirmDialog.genreId);
         }}
+      />
+
+      <ConfirmDialog
+        open={videoUpdateConfirmOpen}
+        title="Update Vimeo and Vault?"
+        description="This will update both Vault and Vimeo for this video."
+        confirmLabel="Yes, Save"
+        cancelLabel="Cancel"
+        isConfirming={videoEditor.saving}
+        onCancel={() => {
+          if (videoEditor.saving) return;
+          setVideoUpdateConfirmOpen(false);
+        }}
+        onConfirm={submitVideoUpdate}
       />
 
       <ConfirmDialog

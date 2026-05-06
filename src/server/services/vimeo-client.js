@@ -32,6 +32,12 @@ const parseTags = (tagPayload) => {
     .filter(Boolean);
 };
 
+const normalizeTag = (value) =>
+  String(value || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .slice(0, 80);
+
 const pickThumbnail = (pictures) => {
   if (!Array.isArray(pictures?.sizes) || pictures.sizes.length === 0) return null;
   const largest = pictures.sizes[pictures.sizes.length - 1];
@@ -110,7 +116,13 @@ export class VimeoClient {
 
       if (response.ok) {
         this.logger.debug?.("Vimeo request succeeded", { path, status: response.status, attempt: attempt + 1 });
-        return response.json();
+        const text = await response.text();
+        if (!text) return null;
+        try {
+          return JSON.parse(text);
+        } catch {
+          return text;
+        }
       }
 
       const body = await response.text();
@@ -248,5 +260,64 @@ export class VimeoClient {
       throw new Error(`Failed downloading text track: ${response.status} ${response.statusText}`);
     }
     return response.text();
+  }
+
+  async updateVideoMetadata(vimeoVideoId, { title, description, privacyView } = {}) {
+    const normalizedId = String(vimeoVideoId || "").trim();
+    if (!normalizedId) throw new Error("Vimeo video id is required.");
+
+    const payload = {};
+    if (typeof title === "string") payload.name = title;
+    if (typeof description === "string") payload.description = description;
+    if (typeof privacyView === "string" && privacyView.trim()) {
+      payload.privacy = { view: privacyView.trim() };
+    }
+    if (!Object.keys(payload).length) {
+      return { skipped: true, reason: "no_supported_metadata_fields" };
+    }
+
+    await this.request(`/videos/${normalizedId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    return { skipped: false };
+  }
+
+  async getVideoTags(vimeoVideoId) {
+    const normalizedId = String(vimeoVideoId || "").trim();
+    if (!normalizedId) throw new Error("Vimeo video id is required.");
+    const payload = await this.request(`/videos/${normalizedId}/tags`);
+    return parseTags(payload?.data || []);
+  }
+
+  async replaceVideoTags(vimeoVideoId, tags = []) {
+    const normalizedId = String(vimeoVideoId || "").trim();
+    if (!normalizedId) throw new Error("Vimeo video id is required.");
+    const desired = Array.from(new Set((tags || []).map(normalizeTag).filter(Boolean)));
+    const existing = await this.getVideoTags(normalizedId);
+    const existingSet = new Set(existing.map((tag) => normalizeTag(tag).toLowerCase()));
+    const desiredSet = new Set(desired.map((tag) => tag.toLowerCase()));
+
+    const toAdd = desired.filter((tag) => !existingSet.has(tag.toLowerCase()));
+    const toRemove = existing.filter((tag) => !desiredSet.has(normalizeTag(tag).toLowerCase()));
+
+    for (const tag of toAdd) {
+      await this.request(`/videos/${normalizedId}/tags/${encodeURIComponent(tag)}`, {
+        method: "PUT"
+      });
+    }
+    for (const tag of toRemove) {
+      await this.request(`/videos/${normalizedId}/tags/${encodeURIComponent(tag)}`, {
+        method: "DELETE"
+      });
+    }
+
+    return {
+      applied: true,
+      finalTags: desired,
+      added: toAdd,
+      removed: toRemove
+    };
   }
 }
