@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import SafeIcon from "@/src/common/SafeIcon";
 import VideoCard from "@/src/components/VideoCard";
@@ -16,6 +16,11 @@ export default function SearchPage() {
   const [hasSearched, setHasSearched] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [searchResults, setSearchResults] = useState([]);
+  const [hasMoreResults, setHasMoreResults] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [currentOffset, setCurrentOffset] = useState(0);
+  const sentinelRef = useRef(null);
+  const PAGE_SIZE = 30;
   const [error, setError] = useState("");
   const [favorites, setFavorites] = useState(new Set());
   const [teamCollections, setTeamCollections] = useState([]);
@@ -45,6 +50,26 @@ export default function SearchPage() {
     setBrief(q);
   }, [searchParams]);
 
+  const runSearch = async ({ append = false } = {}) => {
+    const offset = append ? currentOffset : 0;
+    if (append) setIsLoadingMore(true);
+    else setIsSearching(true);
+    try {
+      const payload = await sendJson("/api/search", {
+        method: "POST",
+        body: JSON.stringify({ query: brief, limit: PAGE_SIZE, offset })
+      });
+      const nextResults = payload.results || [];
+      setSearchResults((prev) => (append ? [...prev, ...nextResults] : nextResults));
+      const nextOffset = offset + nextResults.length;
+      setCurrentOffset(nextOffset);
+      setHasMoreResults(nextResults.length === PAGE_SIZE);
+    } finally {
+      if (append) setIsLoadingMore(false);
+      else setIsSearching(false);
+    }
+  };
+
   useEffect(() => {
     if (!brief.trim()) return;
     if (!searchParams.get("q")) return;
@@ -52,16 +77,10 @@ export default function SearchPage() {
       try {
         setError("");
         setHasSearched(true);
-        setIsSearching(true);
-        const payload = await sendJson("/api/search", {
-          method: "POST",
-          body: JSON.stringify({ query: brief, limit: 30 })
-        });
-        setSearchResults(payload.results || []);
+        setCurrentOffset(0);
+        await runSearch({ append: false });
       } catch (err) {
         setError(err.message);
-      } finally {
-        setIsSearching(false);
       }
     };
     run();
@@ -73,18 +92,28 @@ export default function SearchPage() {
     try {
       setError("");
       setHasSearched(true);
-      setIsSearching(true);
-      const payload = await sendJson("/api/search", {
-        method: "POST",
-        body: JSON.stringify({ query: brief, limit: 30 })
-      });
-      setSearchResults(payload.results || []);
+      setCurrentOffset(0);
+      await runSearch({ append: false });
     } catch (err) {
       setError(err.message);
-    } finally {
-      setIsSearching(false);
     }
   };
+
+  useEffect(() => {
+    if (!hasSearched || isSearching || isLoadingMore || !hasMoreResults) return;
+    const node = sentinelRef.current;
+    if (!node) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          runSearch({ append: true }).catch((err) => setError(err.message));
+        }
+      },
+      { rootMargin: "500px 0px" }
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [hasSearched, isSearching, isLoadingMore, hasMoreResults, currentOffset, brief]);
 
   const toggleFavorite = async (video) => {
     const isFav = favorites.has(video.id);
@@ -187,16 +216,25 @@ export default function SearchPage() {
               ))}
             </div>
           ) : searchResults.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-12">
-              {searchResults.map((video) => (
-                <VideoCard
-                  key={video.id}
-                  video={video}
-                  onClick={setSelectedVideo}
-                  isFeatured={favorites.has(video.id)}
-                  onToggleFeatured={toggleFavorite}
-                />
-              ))}
+            <div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-12">
+                {searchResults.map((video) => (
+                  <VideoCard
+                    key={video.id}
+                    video={video}
+                    onClick={setSelectedVideo}
+                    isFeatured={favorites.has(video.id)}
+                    onToggleFeatured={toggleFavorite}
+                  />
+                ))}
+              </div>
+              <div ref={sentinelRef} className="h-8" />
+              {isLoadingMore && (
+                <div className="text-center text-vicinity-peach/70 text-sm font-bold py-4">Loading more results...</div>
+              )}
+              {!hasMoreResults && searchResults.length > 0 && (
+                <div className="text-center text-white/40 text-xs uppercase tracking-widest py-4">End of results</div>
+              )}
             </div>
           ) : (
             <div className="bg-[#3d4a55] rounded-[4rem] border border-white/5 p-32 text-center shadow-2xl">

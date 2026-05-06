@@ -11,8 +11,9 @@ export async function POST(request) {
     const body = await request.json().catch(() => ({}));
     const query = String(body?.query || "");
     const limit = Number.isFinite(body?.limit) ? Number(body.limit) : 30;
+    const offset = Number.isFinite(body?.offset) ? Number(body.offset) : 0;
     const service = new SearchService({ prisma });
-    const results = await service.search(query, limit);
+    const results = await service.search(query, { limit, offset });
 
     const normalizedQuery = query.trim().toLowerCase();
     if (normalizedQuery && results.length > 0) {

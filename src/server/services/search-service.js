@@ -627,9 +627,16 @@ export class SearchService {
     this.prisma = prisma;
   }
 
-  async search(query, limit = 30) {
+  async search(query, limitOrOptions = 30, maybeOffset = 0) {
+    const options =
+      typeof limitOrOptions === "object" && limitOrOptions !== null
+        ? limitOrOptions
+        : { limit: limitOrOptions, offset: maybeOffset };
+    const limit = Math.max(1, Math.min(100, Number(options.limit) || 30));
+    const offset = Math.max(0, Number(options.offset) || 0);
     const q = normalize(query);
     if (!q) return [];
+    const candidateLimit = Math.max(limit + offset, limit) * 3;
     const qIntent = buildSearchIntentQuery(q);
     const qLower = normalizeLower(qIntent);
     const requirementTerms = buildRequirementTerms(q);
@@ -670,7 +677,7 @@ export class SearchService {
       qIntent,
       `%${qIntent}%`,
       `%${qLower}%`,
-      limit * 3
+      candidateLimit
     );
 
     const transcriptRows = await this.prisma.$queryRawUnsafe(
@@ -697,7 +704,7 @@ export class SearchService {
       `,
       qIntent,
       `%${qIntent}%`,
-      limit * 3
+      candidateLimit
     );
 
     const metadataScoreMap = toScoreMap(metadataRows, "video_id", "metadata_score");
@@ -743,7 +750,7 @@ export class SearchService {
           LIMIT $2;
           `,
           vectorLiteral,
-          limit * 3
+          candidateLimit
         );
 
         for (const row of semanticRows) {
@@ -839,7 +846,7 @@ export class SearchService {
         return true;
       })
       .sort((a, b) => b.mergedScore - a.mergedScore)
-      .slice(0, limit);
+      .slice(offset, offset + limit);
 
     if (rankedEntries.length === 0) {
       return [];
