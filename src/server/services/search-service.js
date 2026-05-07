@@ -306,7 +306,8 @@ const buildRequirementTerms = (query) => {
   for (const term of clean) {
     const group = CHILDCARE_TERM_TO_GROUP[term];
     if (!group) continue;
-    expanded.push(...(CHILDCARE_DOMAIN_ALIASES[group] || []));
+    // Add only the canonical group token to avoid diluting coverage thresholds.
+    expanded.push(group);
   }
   return Array.from(new Set(expanded));
 };
@@ -950,8 +951,11 @@ export class SearchService {
         if (durationConstraint && !isDurationMatch(entry.video, durationConstraint)) return false;
         if (entry.mergedScore < minScoreThreshold) return false;
         if (hasSpecificIntent) {
-          const intentAligned = entry.industryAlignmentScore >= 0 || entry.requirementCoverageScore >= 0.34;
-          const exactEnough = entry.exactMatchScore >= 0.06;
+          const intentAligned = entry.industryAlignmentScore >= 0 || entry.requirementCoverageScore >= 0.3;
+          const exactEnough =
+            entry.exactMatchScore >= 0.06 ||
+            entry.requirementCoverageScore >= 0.22 ||
+            entry.semanticScore >= 0.74;
           if (!intentAligned || !exactEnough) return false;
         }
         if (structuredRequirements.length >= 2) {
