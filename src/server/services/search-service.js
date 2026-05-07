@@ -675,7 +675,22 @@ const scoreDurationMatch = (video, constraint) => {
   return duration >= constraint.seconds ? 0.1 : -0.18;
 };
 
-const buildHeuristicReason = ({ metadataScore, transcriptScore, semanticScore, video }) => {
+const pickBestMatchingTag = (video, requirementTerms = []) => {
+  const tags = (video.video_tags || [])
+    .map((item) => String(item?.tag || "").trim())
+    .filter(Boolean);
+  if (tags.length === 0) return null;
+
+  const normalizedTerms = requirementTerms.map((term) => normalizeLower(term)).filter(Boolean);
+  const matchingTag = tags.find((tag) => {
+    const lowerTag = normalizeLower(tag);
+    return normalizedTerms.some((term) => lowerTag.includes(term) || term.includes(lowerTag));
+  });
+  if (matchingTag) return matchingTag;
+  return tags[0];
+};
+
+const buildHeuristicReason = ({ metadataScore, transcriptScore, semanticScore, video, requirementTerms = [] }) => {
   if (semanticScore >= 0.68) {
     return "Matches because semantic context from transcript and metadata aligns closely with your brief.";
   }
@@ -683,7 +698,7 @@ const buildHeuristicReason = ({ metadataScore, transcriptScore, semanticScore, v
     return "Matches because transcript content directly reflects key ideas from your brief.";
   }
 
-  const topTag = video.video_tags?.[0]?.tag;
+  const topTag = pickBestMatchingTag(video, requirementTerms);
   if (topTag) {
     return `Matches because its metadata and tag "${topTag}" align with your brief context.`;
   }
@@ -701,7 +716,8 @@ export const selectSafeMatchReason = ({
       metadataScore: entry.metadataScore,
       transcriptScore: entry.transcriptScore,
       semanticScore: entry.semanticScore,
-      video: entry.video
+      video: entry.video,
+      requirementTerms
     });
   }
 
@@ -712,7 +728,8 @@ export const selectSafeMatchReason = ({
       metadataScore: entry.metadataScore,
       transcriptScore: entry.transcriptScore,
       semanticScore: entry.semanticScore,
-      video: entry.video
+      video: entry.video,
+      requirementTerms
     });
   }
   return aiReason;
