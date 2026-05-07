@@ -6,7 +6,9 @@ import {
   computeExactMatchScore,
   computeIntentAlignmentScore,
   parseDurationConstraint,
-  isDurationMatch
+  isDurationMatch,
+  hasSpecificIndustryIntent,
+  selectSafeMatchReason
 } from "../search-service.js";
 
 const makeVideo = (overrides = {}) => ({
@@ -36,6 +38,20 @@ test("alias coverage maps doctors symposium to healthcare", () => {
   const intent = extractQueryIntent("doctors symposium testimonial");
   assert.ok(intent.industries.includes("healthcare"));
   assert.ok(intent.formats.includes("testimonial"));
+});
+
+test("childcare query intent includes childcare industry aliases", () => {
+  const intent = extractQueryIntent("ECDA childcare preschool showcase");
+  assert.ok(intent.industries.includes("childcare"));
+});
+
+test("video intent infers childcare from ECDA metadata", () => {
+  const video = makeVideo({
+    title: "ECDA Childcare Anchor Operator Story",
+    description: "Early childhood education and preschool insights"
+  });
+  const inferred = inferVideoIntent(video);
+  assert.ok(inferred.industries.includes("childcare"));
 });
 
 test("video intent infers healthcare from title signals", () => {
@@ -75,6 +91,56 @@ test("format preference favors testimonial phrase matches", () => {
   const testimonialScore = computeExactMatchScore(query, testimonialVideo, terms);
   const promoScore = computeExactMatchScore(query, promoVideo, terms);
   assert.ok(testimonialScore > promoScore);
+});
+
+test("childcare-specific terms outrank unrelated content", () => {
+  const query = "childcare ECDA preschool";
+  const terms = ["childcare", "ecda", "preschool", "early childhood"];
+
+  const childcareVideo = makeVideo({
+    title: "ECDA Childcare Transformation",
+    description: "Preschool and early childhood programme highlights",
+    video_tags: [{ tag: "childcare" }, { tag: "ecda" }]
+  });
+  const unrelatedVideo = makeVideo({
+    title: "Hotel Brand Story",
+    description: "Luxury hospitality experience",
+    video_tags: [{ tag: "hospitality" }]
+  });
+
+  const childcareScore = computeExactMatchScore(query, childcareVideo, terms);
+  const unrelatedScore = computeExactMatchScore(query, unrelatedVideo, terms);
+  assert.ok(childcareScore > unrelatedScore);
+});
+
+test("specific-industry detection triggers for childcare aliases", () => {
+  const intent = extractQueryIntent("show me childcare references");
+  const specific = hasSpecificIndustryIntent(intent, ["childcare", "ecda"]);
+  assert.equal(specific, true);
+});
+
+test("reason guard falls back to deterministic reason when evidence is weak", () => {
+  const entry = {
+    video: makeVideo({
+      title: "General Corporate Highlights",
+      description: "Broad reel with no childcare reference",
+      video_tags: [{ tag: "corporate" }]
+    }),
+    metadataScore: 0.2,
+    transcriptScore: 0.2,
+    semanticScore: 0.1,
+    exactMatchScore: 0.01,
+    requirementCoverageScore: 0.05
+  };
+
+  const reason = selectSafeMatchReason({
+    aiReason: "Matches because this contains childcare and ECDA stories.",
+    entry,
+    requirementTerms: ["childcare", "ecda"]
+  });
+
+  assert.ok(reason.startsWith("Matches because"));
+  assert.notEqual(reason, "Matches because this contains childcare and ECDA stories.");
 });
 
 test("duration parsing supports decimals and strict matching", () => {

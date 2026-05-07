@@ -19,7 +19,9 @@ export default function SearchPage() {
   const [hasMoreResults, setHasMoreResults] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [currentOffset, setCurrentOffset] = useState(0);
+  const [lastLoadedCount, setLastLoadedCount] = useState(0);
   const sentinelRef = useRef(null);
+  const loadGuardRef = useRef({ inFlight: false, lastAppendOffset: -1 });
   const PAGE_SIZE = 30;
   const [error, setError] = useState("");
   const [favorites, setFavorites] = useState(new Set());
@@ -52,8 +54,18 @@ export default function SearchPage() {
 
   const runSearch = async ({ append = false } = {}) => {
     const offset = append ? currentOffset : 0;
+    if (append) {
+      if (loadGuardRef.current.inFlight) return;
+      if (loadGuardRef.current.lastAppendOffset === offset) return;
+      loadGuardRef.current.inFlight = true;
+      loadGuardRef.current.lastAppendOffset = offset;
+    } else {
+      loadGuardRef.current.lastAppendOffset = -1;
+    }
+
     if (append) setIsLoadingMore(true);
     else setIsSearching(true);
+
     try {
       const payload = await sendJson("/api/search", {
         method: "POST",
@@ -61,12 +73,16 @@ export default function SearchPage() {
       });
       const nextResults = payload.results || [];
       setSearchResults((prev) => (append ? [...prev, ...nextResults] : nextResults));
+      setLastLoadedCount(nextResults.length);
       const nextOffset = offset + nextResults.length;
       setCurrentOffset(nextOffset);
       setHasMoreResults(nextResults.length === PAGE_SIZE);
     } finally {
       if (append) setIsLoadingMore(false);
       else setIsSearching(false);
+      if (append) {
+        loadGuardRef.current.inFlight = false;
+      }
     }
   };
 
@@ -78,6 +94,7 @@ export default function SearchPage() {
         setError("");
         setHasSearched(true);
         setCurrentOffset(0);
+        setLastLoadedCount(0);
         await runSearch({ append: false });
       } catch (err) {
         setError(err.message);
@@ -93,6 +110,7 @@ export default function SearchPage() {
       setError("");
       setHasSearched(true);
       setCurrentOffset(0);
+      setLastLoadedCount(0);
       await runSearch({ append: false });
     } catch (err) {
       setError(err.message);
@@ -205,6 +223,12 @@ export default function SearchPage() {
                 <span className="w-2.5 h-2.5 bg-vicinity-peach rounded-full animate-ping" />
                 <p className="text-[10px] font-black text-vicinity-peach uppercase tracking-[0.3em]">AI Ranked Relevance</p>
               </div>
+              {!isSearching && (
+                <p className="text-xs font-bold text-vicinity-peach/60 mt-2">
+                  Showing {searchResults.length} result{searchResults.length === 1 ? "" : "s"}
+                  {hasMoreResults ? " (loading 30 per page)" : ""}
+                </p>
+              )}
             </div>
           </div>
           {isSearching ? (
@@ -230,10 +254,12 @@ export default function SearchPage() {
               </div>
               <div ref={sentinelRef} className="h-8" />
               {isLoadingMore && (
-                <div className="text-center text-vicinity-peach/70 text-sm font-bold py-4">Loading more results...</div>
+                <div className="text-center text-vicinity-peach/70 text-sm font-bold py-4">Loading 30 more results...</div>
               )}
               {!hasMoreResults && searchResults.length > 0 && (
-                <div className="text-center text-white/40 text-xs uppercase tracking-widest py-4">End of results</div>
+                <div className="text-center text-white/40 text-xs uppercase tracking-widest py-4">
+                  End of results ({searchResults.length} total{lastLoadedCount > 0 ? `, last batch ${lastLoadedCount}` : ""})
+                </div>
               )}
             </div>
           ) : (

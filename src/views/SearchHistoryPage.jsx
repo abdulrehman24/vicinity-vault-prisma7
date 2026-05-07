@@ -31,7 +31,7 @@ export default function SearchHistoryPage() {
       setRunningQuery(query);
       await sendJson("/api/search", {
         method: "POST",
-        body: JSON.stringify({ query, limit: 30 })
+        body: JSON.stringify({ query, limit: 30, offset: 0 })
       });
       window.location.href = `/search?q=${encodeURIComponent(query)}`;
     } catch (err) {

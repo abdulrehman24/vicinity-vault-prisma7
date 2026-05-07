@@ -302,8 +302,42 @@ const buildRequirementTerms = (query) => {
     .split(/\s+/)
     .map((part) => part.trim())
     .filter((part) => part.length > 2 && !NOISE_TERMS.has(part));
-  return Array.from(new Set(clean));
+  const expanded = [...clean];
+  for (const term of clean) {
+    const group = CHILDCARE_TERM_TO_GROUP[term];
+    if (!group) continue;
+    expanded.push(...(CHILDCARE_DOMAIN_ALIASES[group] || []));
+  }
+  return Array.from(new Set(expanded));
 };
+
+const CHILDCARE_DOMAIN_ALIASES = {
+  childcare: [
+    "childcare",
+    "child care",
+    "early childhood",
+    "early childhood education",
+    "ece",
+    "ecda",
+    "early years",
+    "preschool",
+    "pre school",
+    "kindergarten",
+    "infant care",
+    "toddler care",
+    "child development",
+    "anchor operator",
+    "sparkle tots",
+    "pcf"
+  ]
+};
+
+const CHILDCARE_TERM_TO_GROUP = Object.entries(CHILDCARE_DOMAIN_ALIASES).reduce((acc, [group, aliases]) => {
+  for (const alias of aliases) {
+    acc[alias] = group;
+  }
+  return acc;
+}, {});
 
 const REQUIREMENT_SYNONYMS = {
   format: [
@@ -355,6 +389,24 @@ const INTENT_TAXONOMY = {
       "guest",
       "guests",
       "intercontinental"
+    ],
+    childcare: [
+      "childcare",
+      "child care",
+      "ecda",
+      "ece",
+      "early childhood",
+      "early childhood education",
+      "early years",
+      "preschool",
+      "pre school",
+      "kindergarten",
+      "infant care",
+      "toddler care",
+      "child development",
+      "anchor operator",
+      "sparkle tots",
+      "pcf"
     ]
   },
   format: {
@@ -399,9 +451,27 @@ const INDUSTRY_INTENT_ALIASES = {
     "nurses",
     "pharma",
     "biotech",
-    "symposium"
-  ],
-  hospitality: ["hospitality", "hotel", "hotels", "resort", "resorts", "tourism", "travel", "guest", "guests", "intercontinental"]
+      "symposium"
+    ],
+  hospitality: ["hospitality", "hotel", "hotels", "resort", "resorts", "tourism", "travel", "guest", "guests", "intercontinental"],
+  childcare: [
+    "childcare",
+    "child care",
+    "ecda",
+    "ece",
+    "early childhood",
+    "early childhood education",
+    "early years",
+    "preschool",
+    "pre school",
+    "kindergarten",
+    "infant care",
+    "toddler care",
+    "child development",
+    "anchor operator",
+    "sparkle tots",
+    "pcf"
+  ]
 };
 
 const INDUSTRY_TERM_TO_INTENT = Object.entries(INDUSTRY_INTENT_ALIASES).reduce((acc, [intent, aliases]) => {
@@ -564,6 +634,20 @@ const computeRequirementCoverage = (video, terms, structuredRequirements = []) =
   return clamp(keywordCoverage * 0.55 + structuredCoverage * 0.45);
 };
 
+export const hasSpecificIndustryIntent = (queryIntent = {}, requirementTerms = []) => {
+  if ((queryIntent.industries || []).length > 0) return true;
+  return requirementTerms.some((term) => Boolean(INDUSTRY_TERM_TO_INTENT[term] || CHILDCARE_TERM_TO_GROUP[term]));
+};
+
+const matchesChildcareEvidence = (reason, video, requirementTerms = []) => {
+  const lower = normalizeLower(reason);
+  if (!lower) return false;
+  const corpus = buildVideoTextCorpus(video);
+  const evidenceTerms = requirementTerms.filter((term) => CHILDCARE_TERM_TO_GROUP[term] || term === "childcare");
+  if (evidenceTerms.length === 0) return true;
+  return evidenceTerms.some((term) => lower.includes(term) && corpus.includes(term));
+};
+
 export const isDurationMatch = (video, constraint) => {
   if (!constraint) return true;
   const duration = Number(video.duration_seconds || 0);
@@ -606,6 +690,33 @@ const buildHeuristicReason = ({ metadataScore, transcriptScore, semanticScore, v
   return "Matches because title, description, and folder context are relevant to your brief.";
 };
 
+export const selectSafeMatchReason = ({
+  aiReason,
+  entry,
+  requirementTerms
+}) => {
+  if (!aiReason) {
+    return buildHeuristicReason({
+      metadataScore: entry.metadataScore,
+      transcriptScore: entry.transcriptScore,
+      semanticScore: entry.semanticScore,
+      video: entry.video
+    });
+  }
+
+  const minEvidence = entry.exactMatchScore >= 0.06 || entry.requirementCoverageScore >= 0.2;
+  const childcareEvidenceOk = matchesChildcareEvidence(aiReason, entry.video, requirementTerms);
+  if (!minEvidence || !childcareEvidenceOk) {
+    return buildHeuristicReason({
+      metadataScore: entry.metadataScore,
+      transcriptScore: entry.transcriptScore,
+      semanticScore: entry.semanticScore,
+      video: entry.video
+    });
+  }
+  return aiReason;
+};
+
 const buildExplanationCandidates = (ranked) =>
   ranked.slice(0, 12).map((entry) => ({
     id: entry.video.id,
@@ -643,6 +754,7 @@ export class SearchService {
     const structuredRequirements = extractStructuredRequirements(q);
     const durationConstraint = parseDurationConstraint(q);
     const queryIntent = extractQueryIntent(q);
+    const hasSpecificIntent = hasSpecificIndustryIntent(queryIntent, requirementTerms);
 
     const metadataRows = await this.prisma.$queryRawUnsafe(
       `
@@ -795,7 +907,7 @@ export class SearchService {
         const industryAlignmentScore = computeIntentAlignmentScore(
           queryIntent.industries,
           inferredVideoIntent.industries,
-          { weight: 0.28, mismatchPenalty: 0.22 }
+          { weight: hasSpecificIntent ? 0.34 : 0.28, mismatchPenalty: hasSpecificIntent ? 0.34 : 0.22 }
         );
         const formatAlignmentScore = computeIntentAlignmentScore(
           queryIntent.formats,
@@ -812,10 +924,10 @@ export class SearchService {
           metadataScore * (metadataWeight + 0.08) +
           transcriptScore * transcriptWeight +
           semanticScore * semanticWeight +
-          exactMatchScore * 0.24 +
+          exactMatchScore * (hasSpecificIntent ? 0.34 : 0.24) +
           industryAlignmentScore +
           formatAlignmentScore +
-          requirementCoverageScore * 0.18 +
+          requirementCoverageScore * (hasSpecificIntent ? 0.24 : 0.18) +
           durationScore;
 
         return {
@@ -837,6 +949,11 @@ export class SearchService {
       .filter((entry) => {
         if (durationConstraint && !isDurationMatch(entry.video, durationConstraint)) return false;
         if (entry.mergedScore < minScoreThreshold) return false;
+        if (hasSpecificIntent) {
+          const intentAligned = entry.industryAlignmentScore >= 0 || entry.requirementCoverageScore >= 0.34;
+          const exactEnough = entry.exactMatchScore >= 0.06;
+          if (!intentAligned || !exactEnough) return false;
+        }
         if (structuredRequirements.length >= 2) {
           return entry.requirementCoverageScore >= 0.35 || entry.semanticScore >= 0.76;
         }
@@ -873,14 +990,11 @@ export class SearchService {
     }
 
     const ranked = rankedEntries.map((entry) => {
-      const reason =
-        aiReasonMap.get(entry.video.id) ||
-        buildHeuristicReason({
-          metadataScore: entry.metadataScore,
-          transcriptScore: entry.transcriptScore,
-          semanticScore: entry.semanticScore,
-          video: entry.video
-        });
+      const reason = selectSafeMatchReason({
+        aiReason: aiReasonMap.get(entry.video.id),
+        entry,
+        requirementTerms
+      });
       return toVideoCardDto(entry.video, {
         matchScore: entry.mergedScore,
         matchReason: reason

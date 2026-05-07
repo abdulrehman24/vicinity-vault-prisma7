@@ -23,7 +23,7 @@ export default function VideoModal({
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-xl">
-      <div className="bg-[#3d4a55] rounded-[3rem] w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col md:flex-row shadow-[0_50px_100px_rgba(0,0,0,0.8)] border border-vicinity-peach/10">
+      <div className="bg-[#3d4a55] rounded-[3rem] w-full max-w-6xl h-[90vh] max-h-[90vh] overflow-hidden flex flex-col md:flex-row shadow-[0_50px_100px_rgba(0,0,0,0.8)] border border-vicinity-peach/10">
         <div className="w-full md:w-3/5 bg-black relative">
           <img src={video.thumbnail} alt={video.title} className="w-full h-full object-cover opacity-70" />
           <div className="absolute inset-0 flex items-center justify-center">
@@ -39,11 +39,15 @@ export default function VideoModal({
             </div>
           </div>
         </div>
-        <div className="w-full md:w-2/5 flex flex-col h-full bg-[#3d4a55] relative text-left">
-          <button onClick={onClose} className="absolute top-8 right-8 p-3 text-vicinity-peach/40 hover:text-vicinity-peach hover:bg-white/10 rounded-full transition-all z-10">
-            <SafeIcon name="X" className="text-3xl" />
-          </button>
-          <div className="p-12 overflow-y-auto flex-1">
+        <div className="w-full md:w-2/5 flex flex-col h-full bg-[#3d4a55] relative text-left min-h-0">
+          <div className="sticky top-0 z-20 bg-[#3d4a55] px-10 pt-8 pb-4 border-b border-vicinity-peach/10">
+            <div className="flex justify-end">
+              <button onClick={onClose} className="p-3 text-vicinity-peach/40 hover:text-vicinity-peach hover:bg-white/10 rounded-full transition-all">
+                <SafeIcon name="X" className="text-3xl" />
+              </button>
+            </div>
+          </div>
+          <div className="px-12 pb-6 overflow-y-auto flex-1 min-h-0">
             <div className="bg-[#4a5a67] rounded-[2rem] p-8 mb-10 border border-vicinity-peach/10 shadow-inner">
               <h4 className="text-[10px] font-black text-vicinity-peach uppercase tracking-[0.3em] mb-4 flex items-center gap-3">
                 <SafeIcon name="Star" className="text-xl" /> Featured Work
@@ -56,7 +60,7 @@ export default function VideoModal({
             </div>
             <div>
               <h4 className="text-[10px] font-black text-vicinity-peach/30 uppercase tracking-[0.3em] mb-4">Metadata Tags</h4>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap gap-2 max-h-44 overflow-y-auto pr-2">
                 {video.tags.map((tag) => (
                   <span key={tag} className="text-[9px] font-black bg-black/20 text-vicinity-peach/40 px-5 py-2.5 rounded-full border border-vicinity-peach/10 uppercase tracking-widest">
                     {tag}
@@ -65,7 +69,7 @@ export default function VideoModal({
               </div>
             </div>
           </div>
-          <div className="p-10 border-t border-vicinity-peach/10 bg-[#323d47] flex flex-col gap-5">
+          <div className="sticky bottom-0 z-20 p-10 border-t border-vicinity-peach/10 bg-[#323d47] flex flex-col gap-5">
             <button
               onClick={() => onToggleFeatured?.(video)}
               disabled={!onToggleFeatured}
