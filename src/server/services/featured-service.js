@@ -39,7 +39,10 @@ export class FeaturedService {
       });
     }
 
-    return videos.map((video) =>
+    const indexMap = new Map(ids.map((id, index) => [id, index]));
+    const ordered = videos.sort((a, b) => (indexMap.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (indexMap.get(b.id) ?? Number.MAX_SAFE_INTEGER));
+
+    return ordered.map((video) =>
       toVideoCardDto(video, {
         matchScore: 0.85,
         matchReason: "Featured because it is currently prioritized by engagement signals."

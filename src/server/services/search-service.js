@@ -5,6 +5,7 @@ import { toVideoCardDto } from "./video-dto";
 const normalize = (query) => String(query || "").trim();
 const normalizeLower = (value) => String(value || "").trim().toLowerCase();
 const clamp = (value, min = 0, max = 1) => Math.max(min, Math.min(max, value));
+const MAX_EMBEDDING_QUERY_CHARS = 4000;
 const NOISE_TERMS = new Set([
   "pls",
   "plz",
@@ -232,6 +233,12 @@ const buildSearchIntentQuery = (raw) => {
     .filter((part) => part.length > 1 && !NOISE_TERMS.has(part));
   const unique = Array.from(new Set(compact));
   return unique.join(" ").trim() || normalized;
+};
+
+const buildSemanticQuery = (raw) => {
+  const normalized = normalize(raw);
+  if (!normalized) return "";
+  return normalized.slice(0, MAX_EMBEDDING_QUERY_CHARS);
 };
 
 const toIdSet = (rows, field) =>
@@ -687,7 +694,36 @@ const pickBestMatchingTag = (video, requirementTerms = []) => {
     return normalizedTerms.some((term) => lowerTag.includes(term) || term.includes(lowerTag));
   });
   if (matchingTag) return matchingTag;
-  return tags[0];
+  return null;
+};
+
+const extractReasonKeywords = (reason) => {
+  const quoted = Array.from(String(reason || "").matchAll(/"([^"]{2,40})"/g)).map((match) => normalizeLower(match[1]));
+  return quoted.filter(Boolean);
+};
+
+const isReasonGrounded = ({ reason, entry, query, requirementTerms = [] }) => {
+  const lowerReason = normalizeLower(reason);
+  if (!lowerReason) return false;
+
+  const corpus = buildVideoTextCorpus(entry.video);
+  const queryLower = normalizeLower(query);
+  const quotedKeywords = extractReasonKeywords(reason);
+
+  if (quotedKeywords.length > 0) {
+    const allQuotedGrounded = quotedKeywords.every((term) => queryLower.includes(term) || corpus.includes(term));
+    if (!allQuotedGrounded) return false;
+  }
+
+  const evidenceTerms = requirementTerms.filter((term) => term.length > 2);
+  if (evidenceTerms.length > 0) {
+    const referencesUnseenTerm = evidenceTerms.some(
+      (term) => lowerReason.includes(term) && !corpus.includes(term) && !queryLower.includes(term)
+    );
+    if (referencesUnseenTerm) return false;
+  }
+
+  return true;
 };
 
 const buildHeuristicReason = ({ metadataScore, transcriptScore, semanticScore, video, requirementTerms = [] }) => {
@@ -709,7 +745,8 @@ const buildHeuristicReason = ({ metadataScore, transcriptScore, semanticScore, v
 export const selectSafeMatchReason = ({
   aiReason,
   entry,
-  requirementTerms
+  requirementTerms,
+  query
 }) => {
   if (!aiReason) {
     return buildHeuristicReason({
@@ -723,7 +760,8 @@ export const selectSafeMatchReason = ({
 
   const minEvidence = entry.exactMatchScore >= 0.06 || entry.requirementCoverageScore >= 0.2;
   const childcareEvidenceOk = matchesChildcareEvidence(aiReason, entry.video, requirementTerms);
-  if (!minEvidence || !childcareEvidenceOk) {
+  const grounded = isReasonGrounded({ reason: aiReason, entry, query, requirementTerms });
+  if (!minEvidence || !childcareEvidenceOk || !grounded) {
     return buildHeuristicReason({
       metadataScore: entry.metadataScore,
       transcriptScore: entry.transcriptScore,
@@ -767,6 +805,7 @@ export class SearchService {
     if (!q) return [];
     const candidateLimit = Math.max(limit + offset, limit) * 3;
     const qIntent = buildSearchIntentQuery(q);
+    const qSemantic = buildSemanticQuery(q);
     const qLower = normalizeLower(qIntent);
     const requirementTerms = buildRequirementTerms(q);
     const structuredRequirements = extractStructuredRequirements(q);
@@ -855,7 +894,7 @@ export class SearchService {
         });
       }
       if (openai?.isConfigured()) {
-        const queryEmbedding = await openai.createEmbedding(qIntent, runtimeAiConfig.embeddingModel);
+        const queryEmbedding = await openai.createEmbedding(qSemantic || qIntent, runtimeAiConfig.embeddingModel);
         const vectorLiteral = `[${queryEmbedding.join(",")}]`;
         const semanticRows = await this.prisma.$queryRawUnsafe(
           `
@@ -1014,7 +1053,8 @@ export class SearchService {
       const reason = selectSafeMatchReason({
         aiReason: aiReasonMap.get(entry.video.id),
         entry,
-        requirementTerms
+        requirementTerms,
+        query: q
       });
       return toVideoCardDto(entry.video, {
         matchScore: entry.mergedScore,

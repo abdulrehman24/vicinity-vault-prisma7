@@ -13,15 +13,28 @@ export default function FeaturedWorks() {
   const [activeCategory, setActiveCategory] = useState("All");
 
   const categories = useMemo(() => {
-    const cats = new Set(["All"]);
-    featuredWorks.forEach((v) => v.tags.forEach((t) => cats.add(t)));
-    return Array.from(cats).slice(0, 8);
+    const catMap = new Map();
+    catMap.set("all", "All");
+    featuredWorks.forEach((v) =>
+      (v.tags || []).forEach((tag) => {
+        const normalized = String(tag || "").trim();
+        if (!normalized) return;
+        const key = normalized.toLowerCase();
+        if (!catMap.has(key)) catMap.set(key, normalized);
+      })
+    );
+    return Array.from(catMap.entries())
+      .slice(0, 8)
+      .map(([, label]) => label);
   }, [featuredWorks]);
 
   const filteredWorks = useMemo(() => {
     return featuredWorks.filter((v) => {
       const matchesSearch = v.title.toLowerCase().includes(filterQuery.toLowerCase()) || v.description.toLowerCase().includes(filterQuery.toLowerCase());
-      const matchesCategory = activeCategory === "All" || v.tags.includes(activeCategory);
+      const activeCategoryLower = activeCategory.toLowerCase();
+      const matchesCategory =
+        activeCategoryLower === "all" ||
+        (v.tags || []).some((tag) => String(tag || "").trim().toLowerCase() === activeCategoryLower);
       return matchesSearch && matchesCategory;
     });
   }, [featuredWorks, filterQuery, activeCategory]);
@@ -58,31 +71,39 @@ export default function FeaturedWorks() {
 
       {featuredWorks.length > 0 && (
         <div className="flex flex-col md:flex-row gap-6 items-center justify-between bg-[#3d4a55]/40 p-6 rounded-[2.5rem] border border-white/5 backdrop-blur-md">
-          <div className="relative w-full md:w-96">
-            <div className="absolute inset-y-0 left-5 flex items-center pointer-events-none text-vicinity-peach/40">
-              <SafeIcon name="Filter" />
+          <div className="flex flex-col md:flex-row gap-4 w-full md:items-center">
+            <div className="relative w-full md:w-96">
+              <div className="absolute inset-y-0 left-5 flex items-center pointer-events-none text-vicinity-peach/40">
+                <SafeIcon name="Filter" />
+              </div>
+              <input
+                type="text"
+                placeholder="Filter by title or keywords..."
+                value={filterQuery}
+                onChange={(e) => setFilterQuery(e.target.value)}
+                className="w-full bg-[#4a5a67]/60 border border-white/10 rounded-2xl pl-12 pr-6 py-4 text-vicinity-peach placeholder-vicinity-peach/30 text-sm font-bold focus:ring-2 focus:ring-vicinity-peach/20 outline-none transition-all"
+              />
             </div>
-            <input
-              type="text"
-              placeholder="Filter by title or keywords..."
-              value={filterQuery}
-              onChange={(e) => setFilterQuery(e.target.value)}
-              className="w-full bg-[#4a5a67]/60 border border-white/10 rounded-2xl pl-12 pr-6 py-4 text-vicinity-peach placeholder-vicinity-peach/30 text-sm font-bold focus:ring-2 focus:ring-vicinity-peach/20 outline-none transition-all"
-            />
-          </div>
-          <div className="flex flex-wrap justify-center gap-2">
-            {categories.map((cat) => (
-              <button
-                key={cat}
-                onClick={() => setActiveCategory(cat)}
-                className={`px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
-                  activeCategory === cat ? "bg-vicinity-peach text-vicinity-slate shadow-lg" : "bg-white/5 text-vicinity-peach/40 hover:text-vicinity-peach hover:bg-white/10"
-                }`}
+            <div className="relative w-full md:w-72">
+              <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none text-vicinity-peach/50">
+                <SafeIcon name="ChevronDown" />
+              </div>
+              <select
+                value={activeCategory}
+                onChange={(e) => setActiveCategory(e.target.value)}
+                className="appearance-none w-full bg-[#4a5a67] border border-vicinity-peach/20 rounded-2xl pl-11 pr-10 py-4 text-vicinity-peach text-sm font-black uppercase tracking-wider focus:ring-2 focus:ring-vicinity-peach/30 outline-none transition-all"
               >
-                {cat}
-              </button>
-            ))}
+                {categories.map((cat) => (
+                  <option key={cat} value={cat} className="bg-[#3d4a55] text-vicinity-peach">
+                    {cat === "All" ? "All Tags" : cat}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
+          <p className="text-[10px] uppercase tracking-widest font-black text-vicinity-peach/40">
+            Tags: {categories.length > 1 ? categories.slice(1).join(", ") : "No tags available"}
+          </p>
         </div>
       )}
 

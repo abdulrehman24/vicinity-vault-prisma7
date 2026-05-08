@@ -2,12 +2,15 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/src/server/db/prisma";
 import { resolveCurrentUser } from "@/src/server/auth/user-context";
 import { PlaylistService } from "@/src/server/services/playlist-service";
+import { env } from "@/src/server/config/env";
 
 export const runtime = "nodejs";
 
 const buildShareUrl = (request, token) => {
   if (!token) return null;
-  const base = request.nextUrl?.origin || "";
+  const configuredBase = env.nextAuthUrl || process.env.APP_BASE_URL || process.env.PUBLIC_APP_URL || "";
+  const requestOrigin = request.nextUrl?.origin || "";
+  const base = (configuredBase || requestOrigin).replace(/\/+$/, "");
   return `${base}/playlists/shared/${token}`;
 };
 
