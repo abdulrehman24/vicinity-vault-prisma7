@@ -233,6 +233,7 @@ export default function AdminPage() {
     }
   };
 
+
   useEffect(() => {
     const load = async () => {
       try {
@@ -728,6 +729,7 @@ export default function AdminPage() {
       setIsDeletingGenre(false);
     }
   };
+
 
   const handleSyncErrorStatus = async (errorId, status) => {
     try {
@@ -1649,6 +1651,7 @@ export default function AdminPage() {
           </div>
         </div>
       )}
+
 
       {isAddingSource && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/95 backdrop-blur-2xl">

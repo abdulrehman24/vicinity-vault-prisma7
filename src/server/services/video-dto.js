@@ -1,4 +1,8 @@
 const toTags = (videoTags) => (videoTags || []).map((tag) => tag.tag);
+const toCategories = (videoCategories) =>
+  (videoCategories || [])
+    .map((item) => item?.category?.name || item?.category?.slug || "")
+    .filter(Boolean);
 
 export const toVideoCardDto = (video, { matchScore = null, matchReason = null } = {}) => ({
   id: video.id,
@@ -6,6 +10,7 @@ export const toVideoCardDto = (video, { matchScore = null, matchReason = null } 
   title: video.title,
   description: video.description || "",
   tags: toTags(video.video_tags),
+  categories: toCategories(video.video_categories),
   duration: video.duration_seconds || 0,
   createdAt: video.published_at || video.created_at,
   link: video.video_url,

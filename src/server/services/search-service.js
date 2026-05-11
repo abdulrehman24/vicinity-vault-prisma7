@@ -363,7 +363,28 @@ const REQUIREMENT_SYNONYMS = {
   ],
   audience: ["corporate", "enterprise", "b2b", "executive", "boardroom"],
   style: ["premium", "luxury", "cinematic", "polished", "elegant", "high-end"],
-  industry: ["healthcare", "medical", "hospital", "pharma", "biotech", "clinical", "hospitality", "hotel", "resort", "travel"]
+  industry: [
+    "healthcare",
+    "medical",
+    "hospital",
+    "pharma",
+    "biotech",
+    "clinical",
+    "hospitality",
+    "hotel",
+    "resort",
+    "travel",
+    "education",
+    "school",
+    "university",
+    "edtech",
+    "technology",
+    "tech",
+    "software",
+    "saas",
+    "ai",
+    "it"
+  ]
 };
 
 const INTENT_TAXONOMY = {
@@ -397,6 +418,38 @@ const INTENT_TAXONOMY = {
       "guest",
       "guests",
       "intercontinental"
+    ],
+    education: [
+      "education",
+      "school",
+      "schools",
+      "student",
+      "students",
+      "classroom",
+      "teacher",
+      "teachers",
+      "university",
+      "college",
+      "campus",
+      "edtech",
+      "learning"
+    ],
+    technology: [
+      "technology",
+      "tech",
+      "software",
+      "platform",
+      "app",
+      "application",
+      "saas",
+      "startup",
+      "engineering",
+      "developer",
+      "developers",
+      "ai",
+      "artificial intelligence",
+      "machine learning",
+      "it"
     ],
     childcare: [
       "childcare",
@@ -462,6 +515,38 @@ const INDUSTRY_INTENT_ALIASES = {
       "symposium"
     ],
   hospitality: ["hospitality", "hotel", "hotels", "resort", "resorts", "tourism", "travel", "guest", "guests", "intercontinental"],
+  education: [
+    "education",
+    "school",
+    "schools",
+    "student",
+    "students",
+    "classroom",
+    "teacher",
+    "teachers",
+    "university",
+    "college",
+    "campus",
+    "edtech",
+    "learning"
+  ],
+  technology: [
+    "technology",
+    "tech",
+    "software",
+    "platform",
+    "app",
+    "application",
+    "saas",
+    "startup",
+    "engineering",
+    "developer",
+    "developers",
+    "ai",
+    "artificial intelligence",
+    "machine learning",
+    "it"
+  ],
   childcare: [
     "childcare",
     "child care",
@@ -697,6 +782,29 @@ const pickBestMatchingTag = (video, requirementTerms = []) => {
   return null;
 };
 
+const FORMAT_ALIASES = Object.values(INTENT_TAXONOMY.format).flat();
+const inferFormatFromText = (value) => {
+  const lower = normalizeLower(value);
+  if (!lower) return [];
+  return canonicalizeIntentGroup(lower, INTENT_TAXONOMY.format);
+};
+
+const isTagFormatAlignedWithQuery = (tag, query, requirementTerms = []) => {
+  const tagFormats = inferFormatFromText(tag);
+  if (tagFormats.length === 0) return true;
+
+  const queryLower = normalizeLower(query);
+  const requestedFormats = new Set(inferFormatFromText(queryLower));
+  if (requestedFormats.size === 0) {
+    const requestedViaTerms = requirementTerms.some((term) =>
+      FORMAT_ALIASES.some((alias) => containsTerm(term, alias) || containsTerm(alias, term))
+    );
+    if (!requestedViaTerms) return false;
+  }
+
+  return tagFormats.some((format) => requestedFormats.has(format));
+};
+
 const extractReasonKeywords = (reason) => {
   const quoted = Array.from(String(reason || "").matchAll(/"([^"]{2,40})"/g)).map((match) => normalizeLower(match[1]));
   return quoted.filter(Boolean);
@@ -726,7 +834,19 @@ const isReasonGrounded = ({ reason, entry, query, requirementTerms = [] }) => {
   return true;
 };
 
-const buildHeuristicReason = ({ metadataScore, transcriptScore, semanticScore, video, requirementTerms = [] }) => {
+const hasUnrequestedFormatMention = ({ reason, query }) => {
+  const reasonLower = normalizeLower(reason);
+  const queryLower = normalizeLower(query);
+  if (!reasonLower) return false;
+
+  const reasonFormats = canonicalizeIntentGroup(reasonLower, INTENT_TAXONOMY.format);
+  if (reasonFormats.length === 0) return false;
+
+  const queryFormats = new Set(canonicalizeIntentGroup(queryLower, INTENT_TAXONOMY.format));
+  return reasonFormats.some((format) => !queryFormats.has(format));
+};
+
+const buildHeuristicReason = ({ metadataScore, transcriptScore, semanticScore, video, requirementTerms = [], query = "" }) => {
   if (semanticScore >= 0.68) {
     return "Matches because semantic context from transcript and metadata aligns closely with your brief.";
   }
@@ -735,7 +855,7 @@ const buildHeuristicReason = ({ metadataScore, transcriptScore, semanticScore, v
   }
 
   const topTag = pickBestMatchingTag(video, requirementTerms);
-  if (topTag) {
+  if (topTag && isTagFormatAlignedWithQuery(topTag, query, requirementTerms)) {
     return `Matches because its metadata and tag "${topTag}" align with your brief context.`;
   }
 
@@ -754,20 +874,23 @@ export const selectSafeMatchReason = ({
       transcriptScore: entry.transcriptScore,
       semanticScore: entry.semanticScore,
       video: entry.video,
-      requirementTerms
+      requirementTerms,
+      query
     });
   }
 
   const minEvidence = entry.exactMatchScore >= 0.06 || entry.requirementCoverageScore >= 0.2;
   const childcareEvidenceOk = matchesChildcareEvidence(aiReason, entry.video, requirementTerms);
   const grounded = isReasonGrounded({ reason: aiReason, entry, query, requirementTerms });
-  if (!minEvidence || !childcareEvidenceOk || !grounded) {
+  const hasFormatDrift = hasUnrequestedFormatMention({ reason: aiReason, query });
+  if (!minEvidence || !childcareEvidenceOk || !grounded || hasFormatDrift) {
     return buildHeuristicReason({
       metadataScore: entry.metadataScore,
       transcriptScore: entry.transcriptScore,
       semanticScore: entry.semanticScore,
       video: entry.video,
-      requirementTerms
+      requirementTerms,
+      query
     });
   }
   return aiReason;

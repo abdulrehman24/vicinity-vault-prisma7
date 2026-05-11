@@ -15,16 +15,19 @@ export default function FeaturedPage() {
   const [favorites, setFavorites] = useState(new Set());
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
+  const [categoryOptions, setCategoryOptions] = useState([]);
 
   const load = async () => {
     setIsLoading(true);
     setError("");
     try {
-      const [featuredPayload, favPayload] = await Promise.all([
+      const [featuredPayload, genresPayload, favPayload] = await Promise.all([
         getJson("/api/featured", { ttlMs: 15000 }),
+        getJson("/api/search/genres", { ttlMs: 60000 }),
         getJson("/api/personal/favorites", { ttlMs: 10000 })
       ]);
       setVideos(featuredPayload.results || []);
+      setCategoryOptions((genresPayload.genres || []).map((item) => item.name).filter(Boolean));
       setFavorites(new Set((favPayload.items || []).map((v) => v.id)));
     } catch (err) {
       setError(err.message);
@@ -38,31 +41,42 @@ export default function FeaturedPage() {
   }, []);
 
   const categories = useMemo(() => {
-    const catMap = new Map();
-    catMap.set("all", "All");
-    videos.forEach((v) =>
-      (v.tags || []).forEach((tag) => {
-        const normalized = String(tag || "").trim();
+    if (categoryOptions.length > 0) {
+      return ["All", ...categoryOptions];
+    }
+    const map = new Map();
+    map.set("all", "All");
+    videos.forEach((v) => {
+      const values = Array.isArray(v.categories) && v.categories.length > 0 ? v.categories : [];
+      values.forEach((category) => {
+        const normalized = String(category || "").trim();
         if (!normalized) return;
         const key = normalized.toLowerCase();
-        if (!catMap.has(key)) catMap.set(key, normalized);
-      })
-    );
-    return Array.from(catMap.entries())
-      .slice(0, 8)
+        if (!map.has(key)) map.set(key, normalized);
+      });
+    });
+    return Array.from(map.entries())
+      .slice(0, 12)
       .map(([, label]) => label);
-  }, [videos]);
+  }, [videos, categoryOptions]);
 
   const filteredWorks = useMemo(
     () =>
       videos.filter((v) => {
+        const videoCategories = (Array.isArray(v.categories) ? v.categories : [])
+          .map((item) => String(item || "").trim().toLowerCase())
+          .filter(Boolean);
+        const videoTags = (Array.isArray(v.tags) ? v.tags : [])
+          .map((item) => String(item || "").trim().toLowerCase())
+          .filter(Boolean);
+        const q = filterQuery.toLowerCase();
         const matchesSearch =
-          v.title.toLowerCase().includes(filterQuery.toLowerCase()) ||
-          v.description.toLowerCase().includes(filterQuery.toLowerCase());
+          v.title.toLowerCase().includes(q) ||
+          v.description.toLowerCase().includes(q) ||
+          videoCategories.some((name) => name.includes(q)) ||
+          videoTags.some((tag) => tag.includes(q));
         const activeCategoryLower = activeCategory.toLowerCase();
-        const matchesCategory =
-          activeCategoryLower === "all" ||
-          (v.tags || []).some((tag) => String(tag || "").trim().toLowerCase() === activeCategoryLower);
+        const matchesCategory = activeCategoryLower === "all" || videoCategories.includes(activeCategoryLower);
         return matchesSearch && matchesCategory;
       }),
     [videos, filterQuery, activeCategory]
@@ -111,18 +125,22 @@ export default function FeaturedPage() {
             <input type="text" placeholder="Filter by title or keywords..." value={filterQuery} onChange={(e) => setFilterQuery(e.target.value)} className="w-full md:w-96 bg-[#4a5a67]/60 border border-white/10 rounded-2xl px-6 py-4 text-vicinity-peach text-sm font-bold" />
             <select
               value={activeCategory}
-              onChange={(e) => setActiveCategory(e.target.value)}
+              onChange={(e) => {
+                const next = e.target.value;
+                setActiveCategory(next);
+                setFilterQuery(next === "All" ? "" : next);
+              }}
               className="w-full md:w-64 bg-[#4a5a67] border border-vicinity-peach/20 rounded-2xl px-4 py-4 text-vicinity-peach text-sm font-black uppercase tracking-wider"
             >
-              {categories.map((cat) => (
-                <option key={cat} value={cat} className="bg-[#3d4a55] text-vicinity-peach">
-                  {cat === "All" ? "All Tags" : cat}
+              {categories.map((category) => (
+                <option key={category} value={category} className="bg-[#3d4a55] text-vicinity-peach">
+                  {category === "All" ? "All Categories" : category}
                 </option>
               ))}
             </select>
           </div>
           <p className="text-[10px] uppercase tracking-widest font-black text-vicinity-peach/40">
-            Tags: {categories.length > 1 ? categories.slice(1).join(", ") : "No tags available"}
+            Categories: {categories.length > 1 ? categories.slice(1).join(", ") : "No categories available"}
           </p>
         </div>
       )}

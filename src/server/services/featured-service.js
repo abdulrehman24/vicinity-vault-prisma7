@@ -35,7 +35,10 @@ export class FeaturedService {
     if (ids.length > 0) {
       videos = await this.prisma.videos.findMany({
         where: { id: { in: ids } },
-        include: { video_tags: true }
+        include: {
+          video_tags: true,
+          video_categories: { include: { category: true } }
+        }
       });
     }
 
