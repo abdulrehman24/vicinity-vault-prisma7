@@ -326,7 +326,8 @@ export class VideoSyncService {
         data: {
           status: sync_run_status.running,
           videos_scanned: progressTotalVideos ?? counters.scanned,
-          videos_deleted: counters.processed,
+          // Retention safeguard: sync should never mark videos as deleted.
+          videos_deleted: 0,
           videos_created: counters.created,
           videos_updated: counters.updated,
           transcripts_processed: counters.transcriptsProcessed,
@@ -901,7 +902,8 @@ export class VideoSyncService {
           status: counters.failed > 0 ? sync_run_status.partial : sync_run_status.success,
           finished_at: new Date(),
           videos_scanned: progressTotalVideos ?? counters.scanned,
-          videos_deleted: counters.processed,
+          // Retention safeguard: keep this at zero to avoid delete semantics.
+          videos_deleted: 0,
           videos_created: counters.created,
           videos_updated: counters.updated,
           transcripts_processed: counters.transcriptsProcessed,
@@ -935,7 +937,8 @@ export class VideoSyncService {
           status: sync_run_status.failed,
           finished_at: new Date(),
           videos_scanned: progressTotalVideos ?? counters.scanned,
-          videos_deleted: counters.processed,
+          // Retention safeguard: sync failures also do not delete videos.
+          videos_deleted: 0,
           videos_created: counters.created,
           videos_updated: counters.updated,
           transcripts_processed: counters.transcriptsProcessed,
@@ -1219,7 +1222,8 @@ export class VideoSyncService {
           status: counters.failed > 0 ? sync_run_status.partial : sync_run_status.success,
           finished_at: new Date(),
           videos_scanned: counters.scanned,
-          videos_deleted: counters.processed,
+          // Retention safeguard: enrichment never deletes videos.
+          videos_deleted: 0,
           videos_created: counters.created,
           videos_updated: counters.updated,
           transcripts_processed: counters.transcriptsProcessed,
@@ -1241,7 +1245,8 @@ export class VideoSyncService {
           status: sync_run_status.failed,
           finished_at: new Date(),
           videos_scanned: counters.scanned,
-          videos_deleted: counters.processed,
+          // Retention safeguard: enrichment failures never delete videos.
+          videos_deleted: 0,
           videos_created: counters.created,
           videos_updated: counters.updated,
           transcripts_processed: counters.transcriptsProcessed,

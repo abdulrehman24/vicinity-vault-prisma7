@@ -147,10 +147,10 @@ export class TranscriptService {
         videoId: videoRecord.id,
         model: this.openAiService.transcriptionModel
       });
-      const transcription = await this.openAiService.transcribeChunkedFromUrl({
+      const transcription = await this.openAiService.transcribeFromUrl({
         mediaUrl,
         filename: `${videoRecord.vimeo_video_id}.mp4`,
-        logger: this.logger
+        modelOverride: this.openAiService.transcriptionModel
       });
 
       const segments = Array.isArray(transcription.segments) && transcription.segments.length > 0
@@ -171,8 +171,8 @@ export class TranscriptService {
           : `OpenAI returned empty transcript (${failedChunks}/${totalChunks} chunks failed).`;
         this.logger.info("OpenAI transcription produced empty output", {
           videoId: videoRecord.id,
-          failedChunks,
-          totalChunks,
+          failedChunks: 0,
+          totalChunks: 1,
           likelyNoSpeech
         });
         await this.persistTranscript({
@@ -206,7 +206,7 @@ export class TranscriptService {
         videoId: videoRecord.id,
         transcriptId,
         chunksCount: chunks.length,
-        failedChunks: transcription.failedChunks?.length || 0,
+        failedChunks: 0,
         model: transcription.model
       });
       return { transcriptId, chunksCount: chunks.length, source: "openai", skipped: false };

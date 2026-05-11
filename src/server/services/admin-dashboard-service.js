@@ -34,14 +34,14 @@ export class AdminDashboardService {
       })
     ]);
 
-    const runningRunIds = recentRuns.filter((run) => run.status === sync_run_status.running).map((run) => run.id);
+    const recentRunIds = recentRuns.map((run) => run.id);
     const processedByRunId = new Map();
 
-    if (runningRunIds.length > 0) {
+    if (recentRunIds.length > 0) {
       const grouped = await this.prisma.sync_run_videos.groupBy({
         by: ["sync_run_id", "status"],
         where: {
-          sync_run_id: { in: runningRunIds }
+          sync_run_id: { in: recentRunIds }
         },
         _count: {
           _all: true
