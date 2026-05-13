@@ -47,6 +47,12 @@ export class AdminOperationsService {
       },
       data: {
         status: source_status.connected,
+        last_sync_at: null,
+        sync_cursor_page: null,
+        sync_cursor_vimeo_id: null,
+        sync_cursor_published_at: null,
+        sync_cursor_updated_at: null,
+        video_count: 0,
         updated_at: resetAt
       }
     });
@@ -54,7 +60,7 @@ export class AdminOperationsService {
     return {
       status: "success",
       message:
-        "Operational tables truncated. Preserved: _prisma_migrations, ai_configs, data_sources, users. Source statuses reset to connected.",
+        "Operational tables truncated. Preserved: _prisma_migrations, ai_configs, data_sources, users. Source sync state reset (status/cursors/last_sync/video_count).",
       sourcesResetToConnected: resetResult.count
     };
   }
