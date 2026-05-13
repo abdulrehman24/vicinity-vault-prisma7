@@ -4,8 +4,10 @@ set -euo pipefail
 
 APP_DIR="/var/www/vault"
 APP_NAME="vault"
-SYNC_WORKER_NAME="vimeo-vault-sync-worker"
-LEGACY_SYNC_WORKER_NAME="vimeo-va"
+SUPERVISOR_APP_NAME="${SUPERVISOR_APP_NAME:-vault-app}"
+SUPERVISOR_WORKER_NAME="${SUPERVISOR_WORKER_NAME:-vault-sync-worker}"
+SYNC_WORKER_NAME="${SYNC_WORKER_NAME:-vimeo-vault-sync-worker}"
+LEGACY_SYNC_WORKER_NAME="${LEGACY_SYNC_WORKER_NAME:-vimeo-va}"
 BRANCH="${1:-main}"
 RUN_NGINX_RELOAD="${RUN_NGINX_RELOAD:-true}"
 SYNC_WORKER_INSTANCES="${SYNC_WORKER_INSTANCES:-4}"
@@ -13,6 +15,7 @@ SYNC_BASE_URL="${SYNC_BASE_URL:-http://127.0.0.1:3000}"
 APP_HEALTH_URL="${APP_HEALTH_URL:-$SYNC_BASE_URL/login}"
 APP_HEALTH_RETRIES="${APP_HEALTH_RETRIES:-30}"
 APP_HEALTH_SLEEP_SECONDS="${APP_HEALTH_SLEEP_SECONDS:-2}"
+PROCESS_MANAGER="${PROCESS_MANAGER:-supervisor}"
 
 echo "[deploy] Starting deployment..."
 
@@ -29,18 +32,34 @@ npm ci
 echo "[deploy] Checking environment..."
 npm run check:env:strict
 
-# If INTERNAL_SYNC_TOKEN is not exported in the current shell, try loading from .env.
-if [[ -z "${INTERNAL_SYNC_TOKEN:-}" && -f ".env" ]]; then
-  token_from_env="$(grep -E '^INTERNAL_SYNC_TOKEN=' .env | tail -n 1 | cut -d '=' -f2- | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")"
-  if [[ -n "${token_from_env:-}" ]]; then
-    export INTERNAL_SYNC_TOKEN="$token_from_env"
-    echo "[deploy] Loaded INTERNAL_SYNC_TOKEN from .env"
+strip_quotes() {
+  sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//"
+}
+
+load_env_var_from_dotenv() {
+  local var_name="$1"
+  if [[ -z "${!var_name:-}" && -f ".env" ]]; then
+    local value
+    value="$(grep -E "^${var_name}=" .env | tail -n 1 | cut -d '=' -f2- | strip_quotes)"
+    if [[ -n "${value:-}" ]]; then
+      export "${var_name}=${value}"
+      echo "[deploy] Loaded ${var_name} from .env"
+    fi
   fi
-fi
+}
+
+load_env_var_from_dotenv "INTERNAL_SYNC_TOKEN"
+load_env_var_from_dotenv "SYNC_SCHEDULER_SECRET"
 
 if [[ -z "${INTERNAL_SYNC_TOKEN:-}" ]]; then
   echo "[deploy] ERROR: INTERNAL_SYNC_TOKEN is required for sync worker authentication."
   echo "[deploy] Set INTERNAL_SYNC_TOKEN in your shell, .env, PM2 ecosystem, or service env before deploy."
+  exit 1
+fi
+
+if [[ -z "${SYNC_SCHEDULER_SECRET:-}" ]]; then
+  echo "[deploy] ERROR: SYNC_SCHEDULER_SECRET is required for scheduled sync endpoints."
+  echo "[deploy] Set SYNC_SCHEDULER_SECRET in your shell, .env, or service env before deploy."
   exit 1
 fi
 
@@ -53,17 +72,20 @@ npx prisma migrate deploy
 echo "[deploy] Building Next.js app..."
 npm run build
 
-echo "[deploy] Removing legacy sync worker process names (if any)..."
-pm2 delete "$LEGACY_SYNC_WORKER_NAME" >/dev/null 2>&1 || true
-
-echo "[deploy] Stopping sync worker before app restart (queue-safe deploy)..."
-pm2 stop "$SYNC_WORKER_NAME" >/dev/null 2>&1 || true
-
-echo "[deploy] Restarting PM2 app..."
-if pm2 describe "$APP_NAME" >/dev/null 2>&1; then
-  pm2 restart "$APP_NAME" --update-env
+if [[ "$PROCESS_MANAGER" == "supervisor" ]]; then
+  echo "[deploy] Restarting Supervisor app..."
+  sudo supervisorctl restart "$SUPERVISOR_APP_NAME"
 else
-  pm2 start npm --name "$APP_NAME" -- start
+  echo "[deploy] Removing legacy sync worker process names (if any)..."
+  pm2 delete "$LEGACY_SYNC_WORKER_NAME" >/dev/null 2>&1 || true
+  echo "[deploy] Stopping sync worker before app restart (queue-safe deploy)..."
+  pm2 stop "$SYNC_WORKER_NAME" >/dev/null 2>&1 || true
+  echo "[deploy] Restarting PM2 app..."
+  if pm2 describe "$APP_NAME" >/dev/null 2>&1; then
+    pm2 restart "$APP_NAME" --update-env
+  else
+    pm2 start npm --name "$APP_NAME" -- start
+  fi
 fi
 
 echo "[deploy] Waiting for app health at $APP_HEALTH_URL ..."
@@ -79,33 +101,39 @@ for ((i=1; i<=APP_HEALTH_RETRIES; i++)); do
   sleep "$APP_HEALTH_SLEEP_SECONDS"
 done
 
-echo "[deploy] Restarting sync worker..."
-if pm2 describe "$SYNC_WORKER_NAME" >/dev/null 2>&1; then
-  INTERNAL_SYNC_TOKEN="$INTERNAL_SYNC_TOKEN" SYNC_BASE_URL="$SYNC_BASE_URL" SYNC_CONCURRENCY="${SYNC_CONCURRENCY:-}" pm2 restart "$SYNC_WORKER_NAME" --update-env
+if [[ "$PROCESS_MANAGER" == "supervisor" ]]; then
+  echo "[deploy] Restarting Supervisor sync worker..."
+  sudo supervisorctl restart "${SUPERVISOR_WORKER_NAME}:*"
+  sudo supervisorctl status "$SUPERVISOR_APP_NAME" "${SUPERVISOR_WORKER_NAME}:*"
 else
-  INTERNAL_SYNC_TOKEN="$INTERNAL_SYNC_TOKEN" SYNC_BASE_URL="$SYNC_BASE_URL" SYNC_CONCURRENCY="${SYNC_CONCURRENCY:-}" pm2 start npm --name "$SYNC_WORKER_NAME" -- run worker:sync
-fi
-
-if [[ "$SYNC_WORKER_INSTANCES" =~ ^[0-9]+$ ]] && [[ "$SYNC_WORKER_INSTANCES" -ge 1 ]]; then
-  echo "[deploy] Scaling sync workers to $SYNC_WORKER_INSTANCES instance(s)..."
-  scale_output="$(pm2 scale "$SYNC_WORKER_NAME" "$SYNC_WORKER_INSTANCES" 2>&1)" || {
-    if echo "$scale_output" | grep -q "Nothing to do"; then
-      echo "[deploy] Worker scale already at target ($SYNC_WORKER_INSTANCES)."
-    else
-      echo "$scale_output"
-      exit 1
-    fi
-  }
-  if [[ -n "${scale_output:-}" ]]; then
-    echo "$scale_output"
+  echo "[deploy] Restarting sync worker..."
+  if pm2 describe "$SYNC_WORKER_NAME" >/dev/null 2>&1; then
+    INTERNAL_SYNC_TOKEN="$INTERNAL_SYNC_TOKEN" SYNC_BASE_URL="$SYNC_BASE_URL" SYNC_CONCURRENCY="${SYNC_CONCURRENCY:-}" pm2 restart "$SYNC_WORKER_NAME" --update-env
+  else
+    INTERNAL_SYNC_TOKEN="$INTERNAL_SYNC_TOKEN" SYNC_BASE_URL="$SYNC_BASE_URL" SYNC_CONCURRENCY="${SYNC_CONCURRENCY:-}" pm2 start npm --name "$SYNC_WORKER_NAME" -- run worker:sync
   fi
-else
-  echo "[deploy] WARN: Invalid SYNC_WORKER_INSTANCES='$SYNC_WORKER_INSTANCES'. Keeping current PM2 scale."
-fi
 
-echo "[deploy] Saving PM2 process list..."
-pm2 save
-pm2 list
+  if [[ "$SYNC_WORKER_INSTANCES" =~ ^[0-9]+$ ]] && [[ "$SYNC_WORKER_INSTANCES" -ge 1 ]]; then
+    echo "[deploy] Scaling sync workers to $SYNC_WORKER_INSTANCES instance(s)..."
+    scale_output="$(pm2 scale "$SYNC_WORKER_NAME" "$SYNC_WORKER_INSTANCES" 2>&1)" || {
+      if echo "$scale_output" | grep -q "Nothing to do"; then
+        echo "[deploy] Worker scale already at target ($SYNC_WORKER_INSTANCES)."
+      else
+        echo "$scale_output"
+        exit 1
+      fi
+    }
+    if [[ -n "${scale_output:-}" ]]; then
+      echo "$scale_output"
+    fi
+  else
+    echo "[deploy] WARN: Invalid SYNC_WORKER_INSTANCES='$SYNC_WORKER_INSTANCES'. Keeping current PM2 scale."
+  fi
+
+  echo "[deploy] Saving PM2 process list..."
+  pm2 save
+  pm2 list
+fi
 
 if [[ "$RUN_NGINX_RELOAD" == "true" ]]; then
   echo "[deploy] Testing Nginx config..."
