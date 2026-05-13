@@ -30,6 +30,7 @@ const PROGRESS_FLUSH_EVERY = 5;
 const PROGRESS_FLUSH_MS = 4000;
 const DEFAULT_SYNC_CONCURRENCY = 2;
 const MAX_SYNC_CONCURRENCY = 10;
+const DELETE_RECONCILE_BATCH_SIZE = 200;
 
 export class VideoSyncService {
   constructor({ prisma, logger = null }) {
@@ -244,6 +245,41 @@ export class VideoSyncService {
     };
   }
 
+  async hardDeleteVideosMissingFromVimeo({ dataSourceId, seenVimeoVideoIds = [] }) {
+    const normalizedSeenIds = Array.from(new Set((seenVimeoVideoIds || []).map((value) => String(value || "").trim()).filter(Boolean)));
+    const seenSet = new Set(normalizedSeenIds);
+    const dbVideos = await this.prisma.videos.findMany({
+      where: {
+        data_source_id: dataSourceId
+      },
+      select: {
+        id: true,
+        vimeo_video_id: true
+      }
+    });
+    const missingVideoRows = dbVideos.filter((row) => !seenSet.has(String(row.vimeo_video_id || "").trim()));
+    let deletedCount = 0;
+    for (let index = 0; index < missingVideoRows.length; index += DELETE_RECONCILE_BATCH_SIZE) {
+      const batch = missingVideoRows.slice(index, index + DELETE_RECONCILE_BATCH_SIZE);
+      const batchIds = batch.map((row) => row.id);
+      if (!batchIds.length) continue;
+      // videos row deletion cascades through dependent tables via FK rules in schema.
+      const deleteResult = await this.prisma.videos.deleteMany({
+        where: {
+          id: { in: batchIds }
+        }
+      });
+      deletedCount += deleteResult.count || 0;
+    }
+
+    return {
+      deletedCount,
+      dbCountBefore: dbVideos.length,
+      missingCount: missingVideoRows.length,
+      sampleDeletedVimeoIds: missingVideoRows.slice(0, 10).map((row) => row.vimeo_video_id)
+    };
+  }
+
   async runForDataSource({
     dataSource,
     existingSyncRunId = null,
@@ -254,6 +290,8 @@ export class VideoSyncService {
     enableTranscript = true,
     enableEmbeddings = true,
     enableCategorization = true,
+    enrichNewOnly = false,
+    reconcileDeletes = false,
     retryOfRunId = null,
     targetVimeoVideoIds = null,
     perPage = 50,
@@ -291,7 +329,9 @@ export class VideoSyncService {
       runTypeTag: runTypeTag || null,
       enableTranscript: Boolean(enableTranscript),
       enableEmbeddings: Boolean(enableEmbeddings),
-      enableCategorization: Boolean(enableCategorization)
+      enableCategorization: Boolean(enableCategorization),
+      enrichNewOnly: Boolean(enrichNewOnly),
+      reconcileDeletes: Boolean(reconcileDeletes)
     });
 
     const counters = {
@@ -299,6 +339,7 @@ export class VideoSyncService {
       processed: 0,
       created: 0,
       updated: 0,
+      deleted: 0,
       failed: 0,
       transcriptsProcessed: 0,
       embeddingsCreated: 0
@@ -326,8 +367,7 @@ export class VideoSyncService {
         data: {
           status: sync_run_status.running,
           videos_scanned: progressTotalVideos ?? counters.scanned,
-          // Retention safeguard: sync should never mark videos as deleted.
-          videos_deleted: 0,
+          videos_deleted: counters.deleted,
           videos_created: counters.created,
           videos_updated: counters.updated,
           transcripts_processed: counters.transcriptsProcessed,
@@ -432,6 +472,7 @@ export class VideoSyncService {
         : [];
       const targetedVimeoVideoIdSet = new Set(targetedVimeoVideoIds);
       const remainingTargetedIds = new Set(targetedVimeoVideoIds);
+      const seenVimeoVideoIds = new Set();
       if (targetedVimeoVideoIdSet.size > 0) {
         runLogger.info("Targeted retry mode enabled", {
           targetCount: targetedVimeoVideoIdSet.size
@@ -475,11 +516,28 @@ export class VideoSyncService {
             });
             if (upserted.isInsert) counters.created += 1;
             else counters.updated += 1;
+            const shouldEnrichVideo = !enrichNewOnly || upserted.isInsert;
             runLogger.info("Video upserted", {
               videoId: videoRecord.id,
               vimeoVideoId: vimeoVideo.vimeoVideoId,
-              action: upserted.isInsert ? "created" : "updated"
+              action: upserted.isInsert ? "created" : "updated",
+              enrichNewOnly: Boolean(enrichNewOnly),
+              shouldEnrichVideo
             });
+
+            if (!shouldEnrichVideo) {
+              await this.markSyncRunVideo({
+                syncRunId: syncRun.id,
+                dataSourceId: dataSource.id,
+                vimeoVideo,
+                videoId: videoRecord.id,
+                status: sync_run_video_status.success,
+                stage: "upsert",
+                errorMessage: null,
+                finishedAt: new Date()
+              });
+              return;
+            }
           } catch (error) {
             counters.failed += 1;
             canProcessVideo = false;
@@ -725,6 +783,7 @@ export class VideoSyncService {
 
       const resumeEnabled =
         env.syncResumeEnabled &&
+        !reconcileDeletes &&
         targetedVimeoVideoIdSet.size === 0 &&
         !resetCursor &&
         Number.isFinite(Number(dataSource.sync_cursor_page)) &&
@@ -750,6 +809,7 @@ export class VideoSyncService {
           try {
             const video = await vimeoClient.getVideoById(targetVimeoVideoId);
             targetedVideos.push(video);
+            seenVimeoVideoIds.add(String(video?.vimeoVideoId || "").trim());
             remainingTargetedIds.delete(String(video?.vimeoVideoId || "").trim());
           } catch (error) {
             counters.failed += 1;
@@ -777,6 +837,10 @@ export class VideoSyncService {
       while (targetedVimeoVideoIdSet.size === 0 && hasMore && pagesFetched < maxPageCount) {
         const pageResult = await vimeoClient.listVideosPage({ page: currentPage, perPage });
         const fetchedVideos = pageResult.videos;
+        for (const fetchedVideo of fetchedVideos) {
+          const fetchedVimeoVideoId = String(fetchedVideo?.vimeoVideoId || "").trim();
+          if (fetchedVimeoVideoId) seenVimeoVideoIds.add(fetchedVimeoVideoId);
+        }
         let videosToProcess =
           targetedVimeoVideoIdSet.size > 0
             ? fetchedVideos.filter((video) => targetedVimeoVideoIdSet.has(String(video?.vimeoVideoId || "").trim()))
@@ -877,6 +941,35 @@ export class VideoSyncService {
         processed: counters.processed
       });
 
+      const canSafelyReconcileDeletes =
+        reconcileDeletes &&
+        targetedVimeoVideoIdSet.size === 0 &&
+        effectiveTestLimit === null &&
+        !Number.isFinite(maxPageCount);
+
+      if (reconcileDeletes && !canSafelyReconcileDeletes) {
+        runLogger.warn("Skipping delete reconciliation due to partial scan safeguards", {
+          targetedMode: targetedVimeoVideoIdSet.size > 0,
+          hasTestLimit: effectiveTestLimit !== null,
+          hasMaxPagesLimit: Number.isFinite(maxPageCount)
+        });
+      }
+
+      if (canSafelyReconcileDeletes) {
+        const deleteSummary = await this.hardDeleteVideosMissingFromVimeo({
+          dataSourceId: dataSource.id,
+          seenVimeoVideoIds: Array.from(seenVimeoVideoIds)
+        });
+        counters.deleted += deleteSummary.deletedCount;
+        runLogger.info("Delete reconciliation completed", {
+          seenCount: seenVimeoVideoIds.size,
+          dbCountBefore: deleteSummary.dbCountBefore,
+          missingCount: deleteSummary.missingCount,
+          deletedCount: deleteSummary.deletedCount,
+          sampleDeletedVimeoIds: deleteSummary.sampleDeletedVimeoIds
+        });
+      }
+
       if (targetedVimeoVideoIdSet.size > 0 && remainingTargetedIds.size > 0) {
         counters.failed += remainingTargetedIds.size;
         const missingIds = Array.from(remainingTargetedIds);
@@ -902,8 +995,7 @@ export class VideoSyncService {
           status: counters.failed > 0 ? sync_run_status.partial : sync_run_status.success,
           finished_at: new Date(),
           videos_scanned: progressTotalVideos ?? counters.scanned,
-          // Retention safeguard: keep this at zero to avoid delete semantics.
-          videos_deleted: 0,
+          videos_deleted: counters.deleted,
           videos_created: counters.created,
           videos_updated: counters.updated,
           transcripts_processed: counters.transcriptsProcessed,
@@ -937,8 +1029,7 @@ export class VideoSyncService {
           status: sync_run_status.failed,
           finished_at: new Date(),
           videos_scanned: progressTotalVideos ?? counters.scanned,
-          // Retention safeguard: sync failures also do not delete videos.
-          videos_deleted: 0,
+          videos_deleted: counters.deleted,
           videos_created: counters.created,
           videos_updated: counters.updated,
           transcripts_processed: counters.transcriptsProcessed,

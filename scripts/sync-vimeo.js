@@ -12,12 +12,26 @@ const main = async () => {
   const perPage = Number(parseArg("perPage", "50"));
   const maxPages = Number(parseArg("maxPages", "0"));
   const testVideoLimit = Number(parseArg("testVideoLimit", ""));
+  const runTypeTag = parseArg("runTypeTag", "baseline_full_sync");
+  const trigger = parseArg("trigger", "manual");
+  const schedulerSecret = parseArg("schedulerSecret", process.env.SYNC_SCHEDULER_SECRET || "");
+  const useScheduledEndpoint = String(parseArg("scheduledEndpoint", "false")).toLowerCase() === "true";
+  const endpoint = useScheduledEndpoint
+    ? runTypeTag === "delete_only_reconcile"
+      ? "/api/internal/sync/scheduled/delete"
+      : "/api/internal/sync/scheduled/sync-new"
+    : "/api/internal/sync/videos";
 
-  const response = await fetch(`${baseUrl}/api/internal/sync/videos`, {
+  const response = await fetch(`${baseUrl}${endpoint}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(schedulerSecret ? { "x-sync-scheduler-secret": schedulerSecret } : {})
+    },
     body: JSON.stringify({
       dataSourceId,
+      runTypeTag,
+      trigger,
       perPage: Number.isFinite(perPage) ? perPage : 50,
       maxPages: Number.isFinite(maxPages) ? maxPages : 0,
       testVideoLimit: Number.isFinite(testVideoLimit) ? testVideoLimit : null

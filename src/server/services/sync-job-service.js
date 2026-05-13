@@ -21,13 +21,35 @@ const buildStageFlags = (runTypeTag) => {
     return {
       enableTranscript: false,
       enableEmbeddings: false,
-      enableCategorization: true
+      enableCategorization: false,
+      enrichNewOnly: false,
+      reconcileDeletes: false
+    };
+  }
+  if (tag === "delete_only_reconcile") {
+    return {
+      enableTranscript: false,
+      enableEmbeddings: false,
+      enableCategorization: false,
+      enrichNewOnly: false,
+      reconcileDeletes: true
+    };
+  }
+  if (tag === "sync_new_enrich") {
+    return {
+      enableTranscript: true,
+      enableEmbeddings: true,
+      enableCategorization: true,
+      enrichNewOnly: true,
+      reconcileDeletes: false
     };
   }
   return {
     enableTranscript: true,
     enableEmbeddings: true,
-    enableCategorization: true
+    enableCategorization: true,
+    enrichNewOnly: false,
+    reconcileDeletes: false
   };
 };
 
@@ -611,6 +633,8 @@ export class SyncJobService {
       enableTranscript: payload.enableTranscript,
       enableEmbeddings: payload.enableEmbeddings,
       enableCategorization: payload.enableCategorization,
+      enrichNewOnly: payload.enrichNewOnly === true,
+      reconcileDeletes: payload.reconcileDeletes === true,
       retryOfRunId: payload.retryOfRunId || null,
       targetVimeoVideoIds: Array.isArray(payload.targetVimeoVideoIds) ? payload.targetVimeoVideoIds : null,
       perPage: payload.perPage,

@@ -16,7 +16,9 @@ export class FavoriteService {
       orderBy: { created_at: "desc" }
     });
 
-    return rows.map((row) =>
+    return rows
+      .filter((row) => Boolean(row.video))
+      .map((row) =>
       toVideoCardDto(row.video, {
         matchScore: 0.9,
         matchReason: "Saved to your favorites."

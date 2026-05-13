@@ -73,7 +73,7 @@ export class PlaylistService {
     });
 
     return rows.map((row) =>
-      toPlaylistDto(row, row.shortlist_items.map((item) => item.video), {
+      toPlaylistDto(row, row.shortlist_items.map((item) => item.video).filter(Boolean), {
         includeShareToken: Boolean(ownerUserId) && row.owner_user_id === ownerUserId
       })
     );
@@ -100,7 +100,7 @@ export class PlaylistService {
     });
 
     return rows.map((row) =>
-      toPlaylistDto(row, row.shortlist_items.map((item) => item.video), {
+      toPlaylistDto(row, row.shortlist_items.map((item) => item.video).filter(Boolean), {
         includeShareToken: true
       })
     );
@@ -324,7 +324,7 @@ export class PlaylistService {
       }
     });
 
-    return toPlaylistDto(row, row.shortlist_items.map((item) => item.video), {
+    return toPlaylistDto(row, row.shortlist_items.map((item) => item.video).filter(Boolean), {
       includeShareToken: true
     });
   }

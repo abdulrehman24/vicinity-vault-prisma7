@@ -40,6 +40,9 @@ export const env = {
   enableSyncFileLogs: asBoolean(process.env.ENABLE_SYNC_FILE_LOGS, true),
   syncTestVideoLimit: asPositiveOrNull(process.env.SYNC_TEST_VIDEO_LIMIT),
   syncResumeEnabled: asBoolean(process.env.SYNC_RESUME_ENABLED, true),
+  syncSchedulerSecret: asOptional(process.env.SYNC_SCHEDULER_SECRET),
+  syncScheduleEnabled: asBoolean(process.env.SYNC_SCHEDULE_ENABLED, true),
+  syncSchedulePerPage: asNumber(process.env.SYNC_SCHEDULE_PER_PAGE, 50),
   transcriptionDownloadTimeoutMs: asNumber(process.env.TRANSCRIPTION_DOWNLOAD_TIMEOUT_MS, 120000),
   transcriptionCommandTimeoutMs: asNumber(process.env.TRANSCRIPTION_COMMAND_TIMEOUT_MS, 180000),
   openaiTranscriptionTimeoutMs: asNumber(process.env.OPENAI_TRANSCRIPTION_TIMEOUT_MS, 180000)
