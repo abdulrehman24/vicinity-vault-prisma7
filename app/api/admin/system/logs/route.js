@@ -69,3 +69,38 @@ export async function GET(request) {
     return NextResponse.json({ error: error.message }, { status: error.statusCode || 500 });
   }
 }
+
+export async function POST(request) {
+  try {
+    await assertAdminRequest(request, prisma);
+
+    if (!syncLogFilePath) {
+      return NextResponse.json(
+        {
+          status: "failed",
+          error: "Sync file logging is disabled. Enable ENABLE_SYNC_FILE_LOGS first."
+        },
+        { status: 400 }
+      );
+    }
+
+    const body = await request.json().catch(() => ({}));
+    if (String(body?.action || "") !== "initialize") {
+      return NextResponse.json({ status: "failed", error: "Unsupported action." }, { status: 400 });
+    }
+
+    const directory = syncLogFilePath.includes("/") || syncLogFilePath.includes("\\")
+      ? syncLogFilePath.replace(/[\\/][^\\/]+$/, "")
+      : ".";
+    await fsp.mkdir(directory, { recursive: true });
+    await fsp.writeFile(syncLogFilePath, "", "utf8");
+
+    return NextResponse.json({
+      status: "success",
+      message: "Sync log file initialized.",
+      filePath: syncLogFilePath
+    });
+  } catch (error) {
+    return NextResponse.json({ error: error.message }, { status: error.statusCode || 500 });
+  }
+}

@@ -67,6 +67,7 @@ export default function AdminPage() {
     truncated: false
   });
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
+  const [isInitializingLogs, setIsInitializingLogs] = useState(false);
   const [syncErrorFilter, setSyncErrorFilter] = useState("open");
   const [errorActionId, setErrorActionId] = useState(null);
   const [isRetryingAllErrors, setIsRetryingAllErrors] = useState(false);
@@ -198,6 +199,22 @@ export default function AdminPage() {
       });
     } finally {
       if (!silent) setIsLoadingLogs(false);
+    }
+  };
+
+  const handleInitializeSyncLogs = async () => {
+    setIsInitializingLogs(true);
+    try {
+      const payload = await apiFetch("/api/admin/system/logs", {
+        method: "POST",
+        body: JSON.stringify({ action: "initialize" })
+      });
+      toast.success(payload.message || "Sync log file initialized.");
+      await loadSyncLogs();
+    } catch (error) {
+      toast.error(error.message || "Failed to initialize sync log file.");
+    } finally {
+      setIsInitializingLogs(false);
     }
   };
 
@@ -1158,14 +1175,24 @@ export default function AdminPage() {
                   Tail view of sync process logs.
                 </p>
               </div>
-              <button
-                onClick={() => loadSyncLogs()}
-                disabled={isLoadingLogs}
-                className="px-4 py-2 rounded-xl bg-[#4a5a67] text-vicinity-peach hover:bg-[#526472] text-[10px] font-black uppercase tracking-widest disabled:opacity-60 flex items-center gap-2"
-              >
-                <SafeIcon name="RefreshCw" className={isLoadingLogs ? "animate-spin" : ""} />
-                {isLoadingLogs ? "Refreshing..." : "Refresh Logs"}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleInitializeSyncLogs}
+                  disabled={isInitializingLogs || isLoadingLogs || !syncLogs.enabled}
+                  className="px-4 py-2 rounded-xl bg-white/10 text-white/80 hover:bg-white/20 text-[10px] font-black uppercase tracking-widest disabled:opacity-60 flex items-center gap-2"
+                >
+                  <SafeIcon name={isInitializingLogs ? "Loader2" : "FilePlus"} className={isInitializingLogs ? "animate-spin" : ""} />
+                  {isInitializingLogs ? "Creating..." : "Create Empty File"}
+                </button>
+                <button
+                  onClick={() => loadSyncLogs()}
+                  disabled={isLoadingLogs}
+                  className="px-4 py-2 rounded-xl bg-[#4a5a67] text-vicinity-peach hover:bg-[#526472] text-[10px] font-black uppercase tracking-widest disabled:opacity-60 flex items-center gap-2"
+                >
+                  <SafeIcon name="RefreshCw" className={isLoadingLogs ? "animate-spin" : ""} />
+                  {isLoadingLogs ? "Refreshing..." : "Refresh Logs"}
+                </button>
+              </div>
             </div>
             <div className="px-10 py-4 text-left border-b border-white/5 bg-black/20">
               <p className="text-[10px] text-vicinity-peach/40 uppercase tracking-widest font-black">
