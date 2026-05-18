@@ -22,7 +22,7 @@ export async function POST(request) {
       dataSourceId: body?.dataSourceId || null,
       initiatedByUserId: null,
       trigger: sync_run_trigger.scheduled,
-      runTypeTag: "delete_only_reconcile",
+      runTypeTag: "delete_local_only",
       resetCursor: true,
       perPage: Number.isFinite(body?.perPage) ? Number(body.perPage) : env.syncSchedulePerPage,
       maxPages: Number.isFinite(body?.maxPages) ? Number(body.maxPages) : 0

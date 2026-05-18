@@ -280,6 +280,21 @@ export class VideoSyncService {
     };
   }
 
+  async hardDeleteAllVideosForSource({ dataSourceId }) {
+    const dbCountBefore = await this.prisma.videos.count({
+      where: { data_source_id: dataSourceId }
+    });
+    const deleteResult = await this.prisma.videos.deleteMany({
+      where: { data_source_id: dataSourceId }
+    });
+    const deletedCount = deleteResult.count || 0;
+    return {
+      deletedCount,
+      dbCountBefore,
+      missingCount: deletedCount
+    };
+  }
+
   async runForDataSource({
     dataSource,
     existingSyncRunId = null,
@@ -388,6 +403,53 @@ export class VideoSyncService {
     };
 
     try {
+      if (runTypeTag === "delete_local_only") {
+        await this.prisma.data_sources.update({
+          where: { id: dataSource.id },
+          data: { status: source_status.syncing, updated_at: new Date() }
+        });
+
+        const deleteSummary = await this.hardDeleteAllVideosForSource({ dataSourceId: dataSource.id });
+        counters.deleted += deleteSummary.deletedCount;
+
+        await queueRunProgressFlush({ force: true });
+        await this.prisma.sync_runs.update({
+          where: { id: syncRun.id },
+          data: {
+            status: sync_run_status.success,
+            finished_at: new Date(),
+            videos_scanned: 0,
+            videos_deleted: counters.deleted,
+            videos_created: 0,
+            videos_updated: 0,
+            transcripts_processed: 0,
+            embeddings_created: 0,
+            error_count: 0
+          }
+        });
+
+        await this.prisma.data_sources.update({
+          where: { id: dataSource.id },
+          data: {
+            last_sync_at: new Date(),
+            status: source_status.connected,
+            video_count: 0
+          }
+        });
+
+        runLogger.info("Local-only delete mode completed", {
+          dbCountBefore: deleteSummary.dbCountBefore,
+          deletedCount: deleteSummary.deletedCount
+        });
+
+        return {
+          syncRunId: syncRun.id,
+          status: "success",
+          logFilePath: runLogger.filePath,
+          counters
+        };
+      }
+
       const aiConfigService = new AdminAiConfigService({ prisma: this.prisma });
       const runtimeAiConfig = await aiConfigService.getRuntimeConfig();
       runLogger.info("Loaded runtime AI config", {

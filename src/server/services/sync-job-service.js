@@ -35,6 +35,15 @@ const buildStageFlags = (runTypeTag) => {
       reconcileDeletes: true
     };
   }
+  if (tag === "delete_local_only") {
+    return {
+      enableTranscript: false,
+      enableEmbeddings: false,
+      enableCategorization: false,
+      enrichNewOnly: false,
+      reconcileDeletes: false
+    };
+  }
   if (tag === "sync_new_enrich") {
     return {
       enableTranscript: true,
