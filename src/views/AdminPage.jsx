@@ -7,6 +7,25 @@ import { toast } from "sonner";
 import ConfirmDialog from "@/src/components/ConfirmDialog";
 
 export default function AdminPage() {
+  const formatRunTriggerLabel = (trigger) => {
+    const value = String(trigger || "").toLowerCase();
+    if (value === "scheduled") return "Scheduled (Cron)";
+    if (value === "manual") return "Manual";
+    if (value === "retry") return "Retry";
+    return value ? value : "Unknown";
+  };
+
+  const formatRunOperationLabel = (run) => {
+    const notes = String(run?.notes || "").toLowerCase();
+    if (notes.includes("embedding_rebuild")) return "Embedding Rebuild";
+    if (notes.includes("delete_local_only")) return "Delete";
+    if (notes.includes("delete_only_reconcile")) return "Delete Reconcile";
+    if (notes.includes("sync_new_enrich")) return "Sync New";
+    if (notes.includes("ingest_only")) return "Ingest Only";
+    if (notes.includes("baseline_full_sync")) return "Full Sync";
+    return "Vimeo Sync";
+  };
+
   const [activeTab, setActiveTab] = useState("system");
   const [isSyncing, setIsSyncing] = useState(false);
   const [isRebuildingEmbeddings, setIsRebuildingEmbeddings] = useState(false);
@@ -966,7 +985,7 @@ export default function AdminPage() {
                       <tr key={run.id} className="hover:bg-white/5 transition-colors">
                         <td className="px-8 py-5 text-white font-bold">{run.sourceName}</td>
                         <td className="px-8 py-5 text-white/50 font-black uppercase tracking-widest text-[10px]">
-                          {String(run.notes || "").includes("embedding_rebuild") ? "Embedding Rebuild" : "Vimeo Sync"}
+                          {`${formatRunTriggerLabel(run.trigger)} • ${formatRunOperationLabel(run)}`}
                         </td>
                         <td className="px-8 py-5">
                           <span
