@@ -47,21 +47,64 @@ export class VideoCategorizationService {
     this.logger = logger;
   }
 
+  async upsertCategorySafe(slug, preferredName) {
+    const normalizedSlug = slugify(slug);
+    if (!normalizedSlug) return null;
+    const baseName = String(preferredName || toDisplayName(normalizedSlug) || normalizedSlug).trim();
+
+    try {
+      return await this.prisma.categories.upsert({
+        where: { slug: normalizedSlug },
+        update: {},
+        create: {
+          slug: normalizedSlug,
+          name: baseName
+        }
+      });
+    } catch (error) {
+      // Another row can already own this name, or the slug may have been created concurrently.
+      if (error?.code !== "P2002") throw error;
+    }
+
+    const existingBySlug = await this.prisma.categories.findUnique({
+      where: { slug: normalizedSlug }
+    });
+    if (existingBySlug) return existingBySlug;
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const candidateName =
+        attempt === 0 ? `${baseName} (${normalizedSlug})` : `${baseName} (${normalizedSlug}-${attempt + 1})`;
+      const nameTaken = await this.prisma.categories.findUnique({
+        where: { name: candidateName },
+        select: { id: true }
+      });
+      if (nameTaken) continue;
+
+      try {
+        return await this.prisma.categories.create({
+          data: {
+            slug: normalizedSlug,
+            name: candidateName
+          }
+        });
+      } catch (error) {
+        if (error?.code !== "P2002") throw error;
+        const concurrentBySlug = await this.prisma.categories.findUnique({
+          where: { slug: normalizedSlug }
+        });
+        if (concurrentBySlug) return concurrentBySlug;
+      }
+    }
+
+    throw new Error(`Unable to create category for slug "${normalizedSlug}" due to repeated unique conflicts.`);
+  }
+
   async ensureDefaultCategories() {
     const entries = Object.entries(DEFAULT_CATEGORY_KEYWORDS);
     if (!entries.length) return;
 
     await Promise.all(
-      entries.map(([slug]) =>
-        this.prisma.categories.upsert({
-          where: { slug },
-          update: {},
-          create: {
-            slug,
-            name: slug.charAt(0).toUpperCase() + slug.slice(1)
-          }
-        })
-      )
+      entries.map(([slug]) => this.upsertCategorySafe(slug, slug.charAt(0).toUpperCase() + slug.slice(1)))
     );
   }
 
@@ -76,14 +119,7 @@ export class VideoCategorizationService {
     if (!normalizedSlugs.length) return;
 
     for (const slug of normalizedSlugs) {
-      await this.prisma.categories.upsert({
-        where: { slug },
-        update: {},
-        create: {
-          slug,
-          name: toDisplayName(slug) || slug
-        }
-      });
+      await this.upsertCategorySafe(slug, toDisplayName(slug) || slug);
     }
   }
 
